@@ -27,9 +27,14 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
   });
 
   // -------------------------------------------------------------------------
-  // P1-1 (revisión adversarial) — formsWriterProc/formsReaderProc gatean
-  // ambos sub-routers (antes sólo `sign` tenía rol). Un rol sin ninguno de
-  // ADMIN/ADMISION/ACCOUNTANT/BILLING/PHYSICIAN debe recibir FORBIDDEN.
+  // P1-1 (revisión adversarial) + ajuste 2026-09-22 — formsWriterProc/
+  // formsReaderProc gatean ambos sub-routers (antes sólo `sign` tenía rol).
+  // Códigos reales verificados contra prod (`select distinct code from
+  // public."Role"`): ni "ADMISION" ni "ACCOUNTANT" ni "BILLING" existen —
+  // el set real es ADMIN/SUPER_ADMIN/ADMIN_CLINICO/ADMISSION_CLERK/
+  // FACTURACION/GERENTE_FINANCIERO (+ PHYSICIAN/MEDICO_AFILIADO/
+  // JEFE_MEDICO_SEDE en formsReaderProc). Un rol sin ninguno de esos debe
+  // recibir FORBIDDEN.
   // -------------------------------------------------------------------------
   describe("gates de rol (formsWriterProc / formsReaderProc)", () => {
     const sinAcceso = { ...MOCK_TENANT, roleCodes: ["TRIAGIST"] };
@@ -48,12 +53,27 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
-    it("callCensus.list OK con rol ADMISION (aunque no sea médico/admin)", async () => {
+    it("callCensus.list OK con rol ADMISSION_CLERK (aunque no sea médico/admin)", async () => {
       prisma.networkCallCensus.findMany.mockResolvedValue([] as never);
       const caller = insuranceRouter.createCaller(
-        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMISION"] } }),
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMISSION_CLERK"] } }),
       );
       await expect(caller.callCensus.list({ limit: 50, offset: 0 })).resolves.toEqual([]);
+    });
+
+    it("callCensus.create OK con rol ADMISSION_CLERK (recepción, no requiere admin/médico)", async () => {
+      prisma.patient.findFirst.mockResolvedValue({ id: patientId } as never);
+      prisma.networkCallCensus.create.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMISSION_CLERK"] } }),
+      );
+      const r = await caller.callCensus.create({
+        patientId,
+        aseguradoraNombre: "ISSS",
+        diagnostico: "x",
+        entries: [],
+      });
+      expect(r.id).toBe(u);
     });
 
     it("outOfNetwork.create FORBIDDEN sin rol de formulario", async () => {
@@ -70,10 +90,10 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
-    it("outOfNetwork.byId OK con rol PHYSICIAN (necesita leer para decidir si aplica)", async () => {
+    it("outOfNetwork.byId OK con rol MEDICO_AFILIADO (código médico multi-org, necesita leer)", async () => {
       prisma.outOfNetworkAttestation.findFirst.mockResolvedValue({ id: u } as never);
       const caller = insuranceRouter.createCaller(
-        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
       );
       await expect(caller.outOfNetwork.byId({ id: u })).resolves.toMatchObject({ id: u });
     });
@@ -198,6 +218,21 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
       expect(data.status).toBe("FIRMADO");
       expect(data.medicoTurnoUserId).toBeTruthy();
       expect(data.firmadoAt).toBeInstanceOf(Date);
+    });
+
+    // Ajuste 2026-09-22 — PHYSICIAN sólo existe en 1 de 21 orgs; el código
+    // médico multi-org real es MEDICO_AFILIADO/JEFE_MEDICO_SEDE.
+    // `formsSignProc` debe aceptarlos igual que PHYSICIAN.
+    it("OK con rol MEDICO_AFILIADO (código médico multi-org, no PHYSICIAN)", async () => {
+      prisma.networkCallCensus.findFirst.mockResolvedValue({
+        _count: { entries: 1 },
+      } as never);
+      prisma.networkCallCensus.update.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      const result = await caller.callCensus.sign({ id: u });
+      expect(result.ok).toBe(true);
     });
   });
 

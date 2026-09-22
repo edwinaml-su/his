@@ -52,20 +52,51 @@ Todo dentro de `withTenantContext` (contrato RLS del repo). Zod schemas en
 
 - `callCensus`: `create` (con `entries` embebidas), `update`/`addEntry`/
   `updateEntry`/`removeEntry` (sólo en `BORRADOR`), `sign` (**requireRole
-  PHYSICIAN** — el "médico de turno" del protocolo; además exige ≥1 fila en
-  el censo, ver §Hallazgos de la revisión adversarial), `anular` (desde
+  formsSignProc** — el "médico de turno" del protocolo; además exige ≥1 fila
+  en el censo, ver §Hallazgos de la revisión adversarial), `anular` (desde
   `BORRADOR`/`FIRMADO`, guarda `motivoAnulacion`), `list`, `byId`.
 - `outOfNetwork`: `create`, `update` (sólo en `PENDIENTE_FIRMA`),
   `markFirmado`, `anular`, `list`, `byId`.
 
-**Roles (`formsWriterProc`/`formsReaderProc`, packages/trpc/src/routers/insurance.router.ts):**
-`create`/`update`/`addEntry`/`updateEntry`/`removeEntry`/`markFirmado`/`anular`
-de ambos sub-routers exigen `["ADMIN", "ADMISION", "ACCOUNTANT", "BILLING"]`
-(`formsWriterProc`); `list`/`byId` exigen esos mismos roles + `PHYSICIAN`
-(`formsReaderProc`, para que el médico de turno pueda leer el censo antes de
-decidir si firma). `sign` sigue exclusivo de `PHYSICIAN`
-(`physicianProc`). `ADMISION` es el código real de admisión del catálogo RBAC
-(sql/194, ya usado en `patient-identification.router.ts`).
+**Roles (`formsWriterProc`/`formsReaderProc`/`formsSignProc`,
+`packages/trpc/src/routers/insurance.router.ts`) — set REAL verificado
+contra prod 2026-09-22:**
+
+El primer intento de esta sección (commit `942aec8`) usó códigos
+`ADMISION`/`ACCOUNTANT`/`BILLING` que **no existen** en el catálogo RBAC de
+producción (`select distinct code from public."Role"` — verificado por
+@Orq). Corregido con los códigos reales:
+
+- `formsWriterProc = requireRole(["ADMIN", "SUPER_ADMIN", "ADMIN_CLINICO", "ADMISSION_CLERK", "FACTURACION", "GERENTE_FINANCIERO"])`
+  — gatea `create`/`update`/`addEntry`/`updateEntry`/`removeEntry`/
+  `markFirmado`/`anular` de ambos sub-routers. `ADMISSION_CLERK` es el
+  código real de admisión/recepción (quien llena estos formularios);
+  `FACTURACION`/`GERENTE_FINANCIERO` porque el paso 5 del protocolo
+  ("notificar a Cuentas/Seguros") hace de esto insumo de facturación.
+- `formsReaderProc` = los mismos roles de `formsWriterProc` + `PHYSICIAN` +
+  `MEDICO_AFILIADO` + `JEFE_MEDICO_SEDE` — gatea `list`/`byId`.
+- `formsSignProc = requireRole(["PHYSICIAN", "MEDICO_AFILIADO", "JEFE_MEDICO_SEDE"])`
+  — gatea exclusivamente `callCensus.sign`. **`PHYSICIAN` existe en 1 sola de
+  las 21 organizaciones sembradas**; las otras 20 usan `MEDICO_AFILIADO`/
+  `JEFE_MEDICO_SEDE` como código médico. Gatear `sign` sólo a `PHYSICIAN`
+  (como se hizo en el primer intento) habría dejado la firma del "médico de
+  turno" imposible en el 95% de las organizaciones. `formsSignProc` es un
+  gate nuevo — NO se reutilizó ni se modificó `physicianProc` (constante
+  preexistente del archivo, se deja intacta).
+
+**Hallazgo para otro CC (NO corregido aquí, fuera de alcance):** los
+`writerProc`/`coverageWriterProc` **preexistentes** de este mismo router
+(CC-0028, líneas ~136-142) usan `requireRole(["ADMIN", "ACCOUNTANT"])` y
+`requireRole(["ADMIN", "ACCOUNTANT", "BILLING"])` respectivamente —
+`ACCOUNTANT` y `BILLING` son códigos **muertos** en el catálogo real de
+prod (mismo problema detectado en este CC). Gatear con un código que no
+existe no rompe nada visiblemente (esos roles simplemente nunca matchean),
+pero deja el candado más restrictivo de lo que el comentario original
+pretendía — cualquier flujo que dependía de `ACCOUNTANT`/`BILLING` para
+crear planes/pólizas/reglas de cobertura hoy sólo es accesible por `ADMIN`.
+Requiere una pasada de auditoría de roles muertos en el resto del router
+(y posiblemente en otros routers financieros) — no se toca en CC-0044 por
+estar fuera del alcance de este cambio.
 
 ## UI (`apps/web/src/app/(admin)/insurance/formularios/`)
 
@@ -95,8 +126,9 @@ decidir si firma). `sign` sigue exclusivo de `PHYSICIAN`
   que el padre resuelva `getTenantContext()` y pase `roleCodes` como prop —
   las 5 páginas de este CC son Client Components hoja sin ese wiring). Un
   usuario sin el rol requerido ve el error `FORBIDDEN` del servidor
-  (`Rol requerido: ADMIN, ADMISION, ACCOUNTANT, BILLING`) al intentar la
-  acción. Ocultar los botones proactivamente queda para cuando exista un
+  (`Rol requerido: ADMIN, SUPER_ADMIN, ADMIN_CLINICO, ADMISSION_CLERK,
+  FACTURACION, GERENTE_FINANCIERO`) al intentar la acción. Ocultar los
+  botones proactivamente queda para cuando exista un
   contexto de roles global reusable — no se justifica construirlo sólo para
   este CC.
 
@@ -111,13 +143,18 @@ decidir si firma). `sign` sigue exclusivo de `PHYSICIAN`
    la sesión de quien imprime. **Corregido**: la vista imprimible es ahora
    JSX (`CensoPrintView`/`ConstanciaPrintView`), React escapa todo el texto
    por default; no hay `document.write` en el CC.
-2. **P1 — gate de roles insuficiente.** Sólo `sign` tenía `requireRole`; el
-   resto (`create`/`update`/`addEntry`/`updateEntry`/`removeEntry`/
-   `markFirmado`/`anular`/`list`/`byId`) corría en `tenantProcedure` (abierto
-   a cualquier rol del tenant). **Corregido** con `formsWriterProc`/
-   `formsReaderProc` (ver §API). Abrir el acceso a más roles (ej. `NURSE`,
-   `MT` para lectura) es **decisión pendiente de Edwin** — el default actual
-   es deliberadamente restrictivo.
+2. **P1 — gate de roles insuficiente (2 rondas).** Ronda 1: sólo `sign` tenía
+   `requireRole`; el resto (`create`/`update`/`addEntry`/`updateEntry`/
+   `removeEntry`/`markFirmado`/`anular`/`list`/`byId`) corría en
+   `tenantProcedure` (abierto a cualquier rol del tenant). Se agregó
+   `formsWriterProc`/`formsReaderProc`, pero con códigos inventados
+   (`ADMISION`/`ACCOUNTANT`/`BILLING`) que no existen en prod. Ronda 2
+   (2026-09-22, verificado contra `public."Role"` real): corregido a los
+   códigos reales — ver §API — y se separó `sign` en su propio
+   `formsSignProc` porque `PHYSICIAN` sólo existe en 1 de 21 organizaciones
+   (gatearlo sólo con ese código habría hecho la firma imposible en el resto).
+   Abrir el acceso a más roles es **decisión pendiente de Edwin** — el
+   default actual es deliberadamente restrictivo.
 3. **P1 — `addEntry` con `ordenIndex` roto.** El schema de contracts
    defaulteaba `ordenIndex` a `0` vía Zod, así que el fallback `?? i` del
    router nunca corría — toda fila agregada después del `create` inicial
@@ -219,3 +256,12 @@ ordenIndex, P2 sign≥1 entry, typo):
   el fix de impresión no tiene test dedicado, ver deuda aceptada arriba).
 - `npm run -w @his/web lint` — **0 errores** (59 warnings preexistentes en
   otros archivos, ninguno en los tocados por este CC).
+
+Tras la corrección de códigos de rol (2026-09-22, verificados contra
+`public."Role"` de prod):
+- `npm run -w @his/trpc typecheck` — OK.
+- `npm run typecheck` (raíz, 7 workspaces vía turbo) — **7/7 verdes**.
+- `npm run -w @his/trpc test` — **249 archivos / 3879 tests OK** (+2 tests
+  nuevos: `callCensus.create` OK con `ADMISSION_CLERK`, `callCensus.sign` OK
+  con `MEDICO_AFILIADO`; los tests de gates existentes se actualizaron a los
+  códigos reales en el mismo commit).

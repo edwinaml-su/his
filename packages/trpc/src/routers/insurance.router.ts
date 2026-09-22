@@ -59,27 +59,58 @@ import { withTenantContext } from "../rls-context";
 const OPEN_STATES = ["PENDING", "REQUESTED"] as const;
 
 // CC-0044 — sign() del censo de llamadas requiere rol médico (protocolo
-// AVANTE: "Médico de turno" firma el pie del formulario).
+// AVANTE: "Médico de turno" firma el pie del formulario). Se conserva tal
+// cual (no se repurpone) — ver `formsSignProc` abajo para el gate real que
+// usa `callCensus.sign` tras la verificación contra prod (2026-09-22).
 const physicianProc = requireRole(["PHYSICIAN"]);
 
-// CC-0044 (P1-1, revisión adversarial) — el router original dejaba
-// create/update/addEntry/updateEntry/removeEntry/markFirmado/anular en
-// tenantProcedure sin gate de rol. Alineado con la convención del propio
-// archivo (`writerProc`/`coverageWriterProc`): estos formularios los llena
-// recepción/admisión al ingresar al paciente, no cualquier rol clínico o
-// administrativo del tenant. `ADMISION` es el código real de admisión del
-// catálogo RBAC (sql/194, ya usado en patient-identification.router.ts
-// "ADMIN/ADMISION"); se agregan ACCOUNTANT/BILLING porque el paso 5 del
-// protocolo ("notificar a Cuentas/Seguros") hace de estos formularios
-// insumo de facturación, igual criterio que `coverageWriterProc`.
-// Default RESTRICTIVO a propósito — abrir a más roles (ej. NURSE, MT) es
-// decisión pendiente de Edwin, ver docs/CC/CC-0044-formularios-fuera-de-red.md.
-const formsWriterProc = requireRole(["ADMIN", "ADMISION", "ACCOUNTANT", "BILLING"]);
+// CC-0044 (P1-1, revisión adversarial + ajuste 2026-09-22) — el router
+// original dejaba create/update/addEntry/updateEntry/removeEntry/
+// markFirmado/anular en tenantProcedure sin gate de rol. El primer intento
+// usó códigos RBAC ("ADMISION", "ACCOUNTANT", "BILLING") que **no existen**
+// en el catálogo real de prod (`select distinct code from public."Role"`,
+// verificado 2026-09-22). Códigos reales usados aquí: `ADMISSION_CLERK`
+// (admisión/recepción — quien llena estos formularios), `FACTURACION` +
+// `GERENTE_FINANCIERO` (paso 5 del protocolo: "notificar a Cuentas/
+// Seguros" hace de esto insumo de facturación), `ADMIN`/`SUPER_ADMIN`/
+// `ADMIN_CLINICO` (administración). Default RESTRICTIVO a propósito — abrir
+// a más roles es decisión pendiente de Edwin, ver
+// docs/CC/CC-0044-formularios-fuera-de-red.md.
+const formsWriterProc = requireRole([
+  "ADMIN",
+  "SUPER_ADMIN",
+  "ADMIN_CLINICO",
+  "ADMISSION_CLERK",
+  "FACTURACION",
+  "GERENTE_FINANCIERO",
+]);
 
-// CC-0044 (P1-1) — list/byId: mismos roles de escritura + PHYSICIAN, porque
-// el médico de turno necesita leer el censo para decidir si firma (sign ya
-// exige PHYSICIAN aparte, vía physicianProc).
-const formsReaderProc = requireRole(["ADMIN", "ADMISION", "ACCOUNTANT", "BILLING", "PHYSICIAN"]);
+// CC-0044 (P1-1 + ajuste 2026-09-22) — list/byId: mismos roles de escritura +
+// los códigos médicos reales de prod. `PHYSICIAN` existe en 1 sola
+// organización; las 21 orgs sembradas usan `MEDICO_AFILIADO`/
+// `JEFE_MEDICO_SEDE` como código médico multi-org — se incluyen los tres
+// para que el médico de turno pueda leer el censo antes de decidir si firma
+// (sign exige rol médico aparte, vía `formsSignProc`).
+const formsReaderProc = requireRole([
+  "ADMIN",
+  "SUPER_ADMIN",
+  "ADMIN_CLINICO",
+  "ADMISSION_CLERK",
+  "FACTURACION",
+  "GERENTE_FINANCIERO",
+  "PHYSICIAN",
+  "MEDICO_AFILIADO",
+  "JEFE_MEDICO_SEDE",
+]);
+
+// CC-0044 (ajuste 2026-09-22) — `callCensus.sign` NO puede gatear sólo a
+// `PHYSICIAN`: ese código sólo existe en 1 de las 21 organizaciones
+// sembradas (verificado contra prod), lo que dejaría la firma del "médico
+// de turno" imposible en las otras 20. `MEDICO_AFILIADO`/`JEFE_MEDICO_SEDE`
+// son los códigos médicos que sí existen en todas las orgs. No se reutiliza
+// `physicianProc` (queda intacto para otros call sites) — se crea este
+// gate específico para el formulario.
+const formsSignProc = requireRole(["PHYSICIAN", "MEDICO_AFILIADO", "JEFE_MEDICO_SEDE"]);
 
 /**
  * CC-0044 — valida que `insurerId` (si viene) sea visible para el tenant
@@ -1143,13 +1174,15 @@ export const insuranceRouter = router({
       }),
 
     /**
-     * Firma del médico de turno (pie del formulario) — requireRole(["PHYSICIAN"]).
-     * Sólo transiciona BORRADOR -> FIRMADO. P2 (revisión adversarial): exige
-     * al menos 1 fila en el censo — un censo firmado con 0 llamadas no tiene
-     * valor probatorio (el propósito del formulario es documentar los
-     * intentos de localizar un médico de la red).
+     * Firma del médico de turno (pie del formulario) — `formsSignProc`
+     * (PHYSICIAN/MEDICO_AFILIADO/JEFE_MEDICO_SEDE, ver comentario arriba:
+     * PHYSICIAN sólo existe en 1 de 21 orgs). Sólo transiciona
+     * BORRADOR -> FIRMADO. P2 (revisión adversarial): exige al menos 1 fila
+     * en el censo — un censo firmado con 0 llamadas no tiene valor
+     * probatorio (el propósito del formulario es documentar los intentos de
+     * localizar un médico de la red).
      */
-    sign: physicianProc
+    sign: formsSignProc
       .input(networkCallCensusSignInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
