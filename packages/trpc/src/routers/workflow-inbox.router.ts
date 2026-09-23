@@ -53,6 +53,33 @@ function ageInMinutes(from: Date, to: Date): number {
   return Math.round(((to.getTime() - from.getTime()) / 60_000) * 10) / 10;
 }
 
+/**
+ * Ejecuta una query "tolerante" (fuente opcional: tabla/columna que puede no
+ * existir en un entorno) dentro de la transacción de `withTenantContext`.
+ *
+ * Un `.catch()` simple NO basta: en Postgres cualquier error aborta la
+ * transacción completa y las queries siguientes fallan con 25P02 ("current
+ * transaction is aborted") — así /tareas moría en `medicationAdministration`
+ * por un error silenciado en la query anterior. El SAVEPOINT acota el daño:
+ * si la query falla, se hace ROLLBACK TO SAVEPOINT y la transacción sigue viva.
+ */
+async function softFail<T>(
+  tx: Pick<PrismaClient, "$executeRawUnsafe">,
+  run: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  await tx.$executeRawUnsafe("SAVEPOINT inbox_soft_fail");
+  try {
+    const result = await run();
+    await tx.$executeRawUnsafe("RELEASE SAVEPOINT inbox_soft_fail");
+    return result;
+  } catch (err) {
+    await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT inbox_soft_fail");
+    console.warn("[workflowInbox] fuente opcional falló, se omite:", (err as Error).message);
+    return fallback;
+  }
+}
+
 function userHasAnyRole(userRoles: string[], required: string[]): boolean {
   return required.some((r) => userRoles.includes(r));
 }
@@ -431,17 +458,15 @@ export const workflowInboxRouter = router({
           // CRITICAL_RESULT_TO_NOTIFY: ece.critical_result_notification sin notificación
           const criticalResults: Array<{ id: string; detectado_en: Date; paciente_id: string }> =
             isEnabled("CRITICAL_RESULT_TO_NOTIFY")
-              ? await (prisma.$queryRawUnsafe(`
+              ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                   SELECT id::text AS id,
-                         detectado_en,
+                         created_at AS detectado_en,
                          paciente_id::text AS paciente_id
                   FROM ece.critical_result_notification
                   WHERE notificado_en IS NULL
-                  ORDER BY detectado_en ASC
+                  ORDER BY created_at ASC
                   LIMIT 100
-                `) as Promise<Array<{ id: string; detectado_en: Date; paciente_id: string }>>).catch(
-                  () => [] as Array<{ id: string; detectado_en: Date; paciente_id: string }>,
-                )
+                `) as Promise<Array<{ id: string; detectado_en: Date; paciente_id: string }>>, [] as Array<{ id: string; detectado_en: Date; paciente_id: string }>)
               : [];
 
           // DOUBLE_CHECK_PENDING: med admin high-alert sin doubleCheckBy
@@ -481,14 +506,14 @@ export const workflowInboxRouter = router({
           // FALL_REPORT_PENDING: caídas no notificadas a JCI
           type FallRow = { id: string; fecha_hora: Date; episodio_id: string };
           const fallsPending: FallRow[] = isEnabled("FALL_REPORT_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                   SELECT id::text AS id, fecha_hora, episodio_id::text AS episodio_id
                   FROM ece.fall_event
                   WHERE notificado_jci = false
                     AND lesion_resultante IN ('moderada','grave','muy_grave')
                   ORDER BY fecha_hora ASC
                   LIMIT 100
-                `) as Promise<FallRow[]>).catch(() => [] as FallRow[])
+                `) as Promise<FallRow[]>, [] as FallRow[])
             : [];
 
           // MORSE_REEVALUATE: valoraciones con escala_morse > 45 (alto riesgo) sin reeval 24h
@@ -498,7 +523,7 @@ export const workflowInboxRouter = router({
             episodio_hospitalario_id: string;
           };
           const morseHigh: MorseRow[] = isEnabled("MORSE_REEVALUATE")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT vie.id::text AS id,
                        vie.registrado_en,
                        vie.episodio_hospitalario_id::text AS episodio_hospitalario_id
@@ -510,7 +535,7 @@ export const workflowInboxRouter = router({
                   AND vie.registrado_en < now() - interval '24 hours'
                 ORDER BY vie.registrado_en ASC
                 LIMIT 100
-              `) as Promise<MorseRow[]>).catch(() => [] as MorseRow[])
+              `) as Promise<MorseRow[]>, [] as MorseRow[])
             : [];
 
           // WRISTBAND_MISSING: encounter activo INPATIENT/EMERGENCY sin gsrn registrado.
@@ -605,7 +630,7 @@ export const workflowInboxRouter = router({
           // explícito "criterios cumplidos"). El médico revisa y completa el egreso.
           type UrpaRow = { id: string; registrado_en: Date; episodio_id: string };
           const urpaPending: UrpaRow[] = isEnabled("URPA_DISCHARGE_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                   SELECT u.id::text AS id,
                          u.registrado_en,
                          u.episodio_id::text AS episodio_id
@@ -614,7 +639,7 @@ export const workflowInboxRouter = router({
                     AND u.registrado_en > now() - interval '2 days'
                   ORDER BY u.registrado_en ASC
                   LIMIT 50
-                `) as Promise<UrpaRow[]>).catch(() => [] as UrpaRow[])
+                `) as Promise<UrpaRow[]>, [] as UrpaRow[])
             : [];
 
           // SURGERY_NOTE_PENDING: cirugía con actualEnd seteado pero postopNotes vacío
@@ -804,7 +829,7 @@ export const workflowInboxRouter = router({
 
           // RESPIRATORY_ORDER_PENDING: RespiratoryOrder ACTIVE en última hora
           const respPending = isEnabled("RESPIRATORY_ORDER_PENDING")
-            ? await prisma.respiratoryOrder.findMany({
+            ? await softFail(prisma, () => prisma.respiratoryOrder.findMany({
                 where: {
                   organizationId: orgId,
                   status: "ACTIVE",
@@ -813,17 +838,17 @@ export const workflowInboxRouter = router({
                 select: { id: true, createdAt: true, patientId: true },
                 orderBy: { createdAt: "asc" },
                 take: 100,
-              }).catch(() => [])
+              }), [])
             : [];
 
           // NUTRITION_ORDER_PENDING: NutritionOrder ORDERED (pendiente aprobación)
           const nutriPending = isEnabled("NUTRITION_ORDER_PENDING")
-            ? await prisma.nutritionOrder.findMany({
+            ? await softFail(prisma, () => prisma.nutritionOrder.findMany({
                 where: { organizationId: orgId, status: "ORDERED" },
                 select: { id: true, createdAt: true, patientId: true },
                 orderBy: { createdAt: "asc" },
                 take: 100,
-              }).catch(() => [])
+              }), [])
             : [];
 
           // STUDY_TO_SCHEDULE: ImagingOrder ORDERED sin SCHEDULED
@@ -842,7 +867,7 @@ export const workflowInboxRouter = router({
 
           type ParteRow = { id: string; ultima_actualizacion: Date; paciente_id: string };
           const partogramaOverdue: ParteRow[] = isEnabled("PARTOGRAMA_OVERDUE")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT p.id::text AS id,
                        p.actualizado_en AS ultima_actualizacion,
                        ea.paciente_id::text AS paciente_id
@@ -852,12 +877,12 @@ export const workflowInboxRouter = router({
                   AND p.actualizado_en < now() - interval '30 minutes'
                 ORDER BY p.actualizado_en ASC
                 LIMIT 100
-              `) as Promise<ParteRow[]>).catch(() => [] as ParteRow[])
+              `) as Promise<ParteRow[]>, [] as ParteRow[])
             : [];
 
           type RnRow = { id: string; nacimiento_en: Date; paciente_id: string };
           const rnApgarPending: RnRow[] = isEnabled("RN_APGAR_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT rn.id::text AS id,
                        rn.fecha_nacimiento AS nacimiento_en,
                        rn.paciente_id::text AS paciente_id
@@ -866,12 +891,12 @@ export const workflowInboxRouter = router({
                   AND rn.fecha_nacimiento > now() - interval '10 minutes'
                 ORDER BY rn.fecha_nacimiento ASC
                 LIMIT 50
-              `) as Promise<RnRow[]>).catch(() => [] as RnRow[])
+              `) as Promise<RnRow[]>, [] as RnRow[])
             : [];
 
           type NrpRow = { id: string; evento_en: Date; paciente_id: string };
           const nrpPostevent: NrpRow[] = isEnabled("NRP_POSTEVENT_DEBRIEF")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT n.id::text AS id,
                        n.fecha_hora AS evento_en,
                        rn.paciente_id::text AS paciente_id
@@ -882,7 +907,7 @@ export const workflowInboxRouter = router({
                   AND n.fecha_hora > now() - interval '7 days'
                 ORDER BY n.fecha_hora ASC
                 LIMIT 50
-              `) as Promise<NrpRow[]>).catch(() => [] as NrpRow[])
+              `) as Promise<NrpRow[]>, [] as NrpRow[])
             : [];
 
           // ═══════════════════════════════════════════════════════════════════════
@@ -891,7 +916,7 @@ export const workflowInboxRouter = router({
 
           // BLOOD_VERIFY_PENDING: TransfusionRequest APPROVED sin Transfusion asociada
           const bloodVerifyPending = isEnabled("BLOOD_VERIFY_PENDING")
-            ? await prisma.transfusionRequest.findMany({
+            ? await softFail(prisma, () => prisma.transfusionRequest.findMany({
                 where: {
                   organizationId: orgId,
                   status: "APPROVED",
@@ -899,7 +924,7 @@ export const workflowInboxRouter = router({
                 select: { id: true, createdAt: true, patientId: true },
                 orderBy: { createdAt: "asc" },
                 take: 100,
-              }).catch(() => [])
+              }), [])
             : [];
 
           // BLOOD_REACTION_REPORT: Transfusion con adverseReactions JSONB no nulo sin reporte
@@ -910,7 +935,7 @@ export const workflowInboxRouter = router({
             encounter_id: string;
           };
           const bloodReactPending: BloodReactRow[] = isEnabled("BLOOD_REACTION_REPORT")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        "startedAt" AS started_at,
                        "encounterId"::text AS encounter_id
@@ -920,7 +945,7 @@ export const workflowInboxRouter = router({
                   AND "completedAt" > now() - interval '7 days'
                 ORDER BY "startedAt" ASC
                 LIMIT 50
-              `, orgId) as Promise<BloodReactRow[]>).catch(() => [] as BloodReactRow[])
+              `, orgId) as Promise<BloodReactRow[]>, [] as BloodReactRow[])
             : [];
 
           // ═══════════════════════════════════════════════════════════════════════
@@ -945,12 +970,12 @@ export const workflowInboxRouter = router({
           // ARCO_REQUEST_PENDING: solicitud ARCO con estado=PENDIENTE
           type ArcoRow = { id: string; creado_en: Date; paciente_id: string };
           const arcoPending: ArcoRow[] = isEnabled("ARCO_REQUEST_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id, creado_en, paciente_id::text AS paciente_id
                 FROM ece.solicitud_arco
                 WHERE estado = 'PENDIENTE' AND organizacion_id = $1::uuid
                 ORDER BY creado_en ASC LIMIT 100
-              `, orgId) as Promise<ArcoRow[]>).catch(() => [] as ArcoRow[])
+              `, orgId) as Promise<ArcoRow[]>, [] as ArcoRow[])
             : [];
 
           // MPI_MERGE_PENDING: EcePatientMerge.estado=PENDIENTE
@@ -981,7 +1006,7 @@ export const workflowInboxRouter = router({
           };
           // ADR: HIGH/CRITICAL severity (reacciones adversas — reporte regulatorio)
           const adrPending: FarmaRow[] = isEnabled("ADR_REPORT_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        detected_at,
                        patient_id::text AS patient_id,
@@ -990,12 +1015,12 @@ export const workflowInboxRouter = router({
                 FROM ece.farmacovigilancia_incident
                 WHERE status = 'PENDIENTE' AND severity IN ('HIGH','CRITICAL')
                 ORDER BY detected_at ASC LIMIT 100
-              `) as Promise<FarmaRow[]>).catch(() => [] as FarmaRow[])
+              `) as Promise<FarmaRow[]>, [] as FarmaRow[])
             : [];
 
           // INCIDENT: LOW/MEDIUM severity (revisión de calidad rutinaria)
           const incidentToReview: FarmaRow[] = isEnabled("INCIDENT_TO_REVIEW")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        detected_at,
                        patient_id::text AS patient_id,
@@ -1004,7 +1029,7 @@ export const workflowInboxRouter = router({
                 FROM ece.farmacovigilancia_incident
                 WHERE status = 'PENDIENTE' AND severity IN ('LOW','MEDIUM')
                 ORDER BY detected_at ASC LIMIT 100
-              `) as Promise<FarmaRow[]>).catch(() => [] as FarmaRow[])
+              `) as Promise<FarmaRow[]>, [] as FarmaRow[])
             : [];
 
           // ═══════════════════════════════════════════════════════════════════════
@@ -1013,14 +1038,14 @@ export const workflowInboxRouter = router({
 
           type ColdRow = { id: string; ocurrido_en: Date; equipo_id: string };
           const coldChainBreach: ColdRow[] = isEnabled("COLD_CHAIN_BREACH")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        COALESCE(resuelta_en, creada_en) AS ocurrido_en,
                        equipo_id::text AS equipo_id
                 FROM ece.cold_chain_alerta
                 WHERE resuelta = false
                 ORDER BY creada_en ASC LIMIT 50
-              `) as Promise<ColdRow[]>).catch(() => [] as ColdRow[])
+              `) as Promise<ColdRow[]>, [] as ColdRow[])
             : [];
 
           // ═══════════════════════════════════════════════════════════════════════
@@ -1092,7 +1117,7 @@ export const workflowInboxRouter = router({
             updated_at: Date;
           };
           const lowStock: LowStockRow[] = isEnabled("INVENTORY_LOW_STOCK")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT sl.id::text AS id,
                        sl."lotNumber" AS lot_number,
                        si.name AS item_name,
@@ -1107,7 +1132,7 @@ export const workflowInboxRouter = router({
                   AND sl."quantityOnHand" < si."reorderLevel"
                 ORDER BY (si."reorderLevel" - sl."quantityOnHand") DESC
                 LIMIT 50
-              `, orgId) as Promise<LowStockRow[]>).catch(() => [] as LowStockRow[])
+              `, orgId) as Promise<LowStockRow[]>, [] as LowStockRow[])
             : [];
 
           // INVENTORY_EXPIRING_SOON: StockLot.expiryDate < now + 30d con qty > 0
@@ -1135,19 +1160,19 @@ export const workflowInboxRouter = router({
           // GS1_INBOUND_PENDING: ece.recepcion_mercancia (Proceso A) en estado borrador
           type InboundRow = { id: string; registrado_en: Date };
           const gs1Inbound: InboundRow[] = isEnabled("GS1_INBOUND_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id, registrado_en
                 FROM ece.recepcion_mercancia
                 WHERE estado_registro = 'borrador'
                   AND registrado_en > now() - interval '30 days'
                 ORDER BY registrado_en ASC LIMIT 50
-              `) as Promise<InboundRow[]>).catch(() => [] as InboundRow[])
+              `) as Promise<InboundRow[]>, [] as InboundRow[])
             : [];
 
           // GS1_TRANSFER_PENDING: ece.transferencia_inventario en programado/en_transito
           type TransferRow = { id: string; fecha_envio: Date; origen_gln: string; destino_gln: string };
           const gs1Transfer: TransferRow[] = isEnabled("GS1_TRANSFER_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        COALESCE(fecha_envio, NOW()) AS fecha_envio,
                        origen_gln,
@@ -1155,19 +1180,19 @@ export const workflowInboxRouter = router({
                 FROM ece.transferencia_inventario
                 WHERE estado IN ('programado','en_transito')
                 ORDER BY fecha_envio ASC NULLS FIRST LIMIT 50
-              `) as Promise<TransferRow[]>).catch(() => [] as TransferRow[])
+              `) as Promise<TransferRow[]>, [] as TransferRow[])
             : [];
 
           // GS1_RETURN_PENDING: ece.devolucion_inventario en borrador
           type ReturnRow = { id: string; registrado_en: Date };
           const gs1Return: ReturnRow[] = isEnabled("GS1_RETURN_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id, registrado_en
                 FROM ece.devolucion_inventario
                 WHERE estado_registro = 'borrador'
                   AND registrado_en > now() - interval '30 days'
                 ORDER BY registrado_en ASC LIMIT 50
-              `) as Promise<ReturnRow[]>).catch(() => [] as ReturnRow[])
+              `) as Promise<ReturnRow[]>, [] as ReturnRow[])
             : [];
 
           // GS1_RECALL_TO_PURGE: ece.farmacovigilancia_incident tipo=RECALL_DETECTADO
@@ -1180,7 +1205,7 @@ export const workflowInboxRouter = router({
             severity: string;
           };
           const gs1Recall: RecallRow[] = isEnabled("GS1_RECALL_TO_PURGE")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT id::text AS id,
                        detected_at,
                        gtin,
@@ -1197,7 +1222,7 @@ export const workflowInboxRouter = router({
                   END,
                   detected_at ASC
                 LIMIT 50
-              `) as Promise<RecallRow[]>).catch(() => [] as RecallRow[])
+              `) as Promise<RecallRow[]>, [] as RecallRow[])
             : [];
 
           // ═══════════════════════════════════════════════════════════════════════
@@ -1211,7 +1236,7 @@ export const workflowInboxRouter = router({
             patient_id: string;
           };
           const deathCertPending: DeathPendingRow[] = isEnabled("DEATH_CERT_PENDING")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT e.id::text AS encounter_id,
                        e."dischargedAt" AS discharged_at,
                        e."patientId"::text AS patient_id
@@ -1224,7 +1249,7 @@ export const workflowInboxRouter = router({
                   AND dc.id IS NULL
                 ORDER BY e."dischargedAt" ASC
                 LIMIT 50
-              `, orgId) as Promise<DeathPendingRow[]>).catch(() => [] as DeathPendingRow[])
+              `, orgId) as Promise<DeathPendingRow[]>, [] as DeathPendingRow[])
             : [];
 
           // CLAIM_REJECTED_TO_APPEAL: InsuranceClaim status=REJECTED
@@ -1251,7 +1276,7 @@ export const workflowInboxRouter = router({
             insurer_name: string;
           };
           const claimsPendingSubmission: ClaimPendingRow[] = isEnabled("CLAIM_PENDING_SUBMISSION")
-            ? await (prisma.$queryRawUnsafe(`
+            ? await softFail(prisma, () => prisma.$queryRawUnsafe(`
                 SELECT inv.id::text AS id,
                        inv."createdAt" AS created_at,
                        ins."tradeName" AS insurer_name
@@ -1267,7 +1292,7 @@ export const workflowInboxRouter = router({
                   AND inv."createdAt" > now() - interval '7 days'
                   AND ic.id IS NULL
                 ORDER BY inv."createdAt" ASC LIMIT 50
-              `, orgId) as Promise<ClaimPendingRow[]>).catch(() => [] as ClaimPendingRow[])
+              `, orgId) as Promise<ClaimPendingRow[]>, [] as ClaimPendingRow[])
             : [];
 
           return {
