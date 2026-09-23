@@ -62,17 +62,19 @@ function ageInMinutes(from: Date, to: Date): number {
  * transaction is aborted") — así /tareas moría en `medicationAdministration`
  * por un error silenciado en la query anterior. El SAVEPOINT acota el daño:
  * si la query falla, se hace ROLLBACK TO SAVEPOINT y la transacción sigue viva.
+ *
+ * Sin RELEASE a propósito: redeclarar el mismo nombre es válido en Postgres y
+ * ROLLBACK TO apunta siempre al más reciente; ahorra un round-trip por fuente
+ * (el bloque 5 tiene ~18 en serie contra un timeout de 8s).
  */
-async function softFail<T>(
+export async function softFail<T>(
   tx: Pick<PrismaClient, "$executeRawUnsafe">,
   run: () => Promise<T>,
   fallback: T,
 ): Promise<T> {
   await tx.$executeRawUnsafe("SAVEPOINT inbox_soft_fail");
   try {
-    const result = await run();
-    await tx.$executeRawUnsafe("RELEASE SAVEPOINT inbox_soft_fail");
-    return result;
+    return await run();
   } catch (err) {
     await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT inbox_soft_fail");
     console.warn("[workflowInbox] fuente opcional falló, se omite:", (err as Error).message);
