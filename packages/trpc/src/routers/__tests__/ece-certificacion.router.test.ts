@@ -194,6 +194,62 @@ describe("eceCertificacionRouter", () => {
       );
       await expect(caller.listCola({})).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
+
+    /**
+     * D5 (plan de remediación 2026-09) — el cursor debe ser coherente con el
+     * ORDER BY. Bug original: WHERE filtraba `di.id > $2` pero el ORDER BY era
+     * por `creado_en`/`actualizado_en` (columna sin relación con el id) — la
+     * página siguiente podía saltarse filas (id mayor, fecha anterior a la ya
+     * listada) o repetirlas (id menor, fecha posterior). Este test falla
+     * contra ese código: no había NINGÚN `di.id` en el ORDER BY, y el WHERE
+     * usaba solo `di.id`, nunca la columna de orden.
+     */
+    it.each([
+      { incluirCertificados: false, label: "creado_en ASC (cola pendiente)" },
+      { incluirCertificados: true, label: "actualizado_en DESC (histórico)" },
+    ])(
+      "usa un cursor compuesto (columna de orden + id) coherente con el ORDER BY — $label",
+      async ({ incluirCertificados }) => {
+        setupWorkflowContext();
+        prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+        const caller = eceCertificacionRouter.createCaller(
+          makeCtx({ prisma, tenant: DIR_TENANT }),
+        );
+        await caller.listCola({ incluirCertificados, cursor: INSTANCIA_ID });
+
+        const call = prisma.$queryRawUnsafe.mock.calls[0]!;
+        const [sql, , cursorParam] = call as [string, ...unknown[]];
+
+        // El ORDER BY debe desempatar por `di.id` en el MISMO sentido que la
+        // columna de orden principal (si no, el desempate no es determinista).
+        const orderMatch = sql.match(
+          /ORDER BY di\.(creado_en|actualizado_en) (ASC|DESC), di\.id (ASC|DESC)/,
+        );
+        expect(orderMatch).not.toBeNull();
+        const [, sortColumn, sortDirection, idDirection] = orderMatch!;
+        expect(idDirection).toBe(sortDirection);
+
+        // El WHERE del cursor debe filtrar por la MISMA columna del ORDER BY
+        // + id (tupla), resolviendo la fecha real de la fila-cursor por PK —
+        // nunca solo por `di.id` (ese fue el bug: id sin relación con la
+        // fecha de orden).
+        const whereRegex = new RegExp(
+          `\\(di\\.${sortColumn}, di\\.id\\) (<|>) \\(\\s*SELECT ${sortColumn}, id FROM ece\\.documento_instancia WHERE id = \\$2::uuid\\s*\\)`,
+        );
+        const whereMatch = sql.match(whereRegex);
+        expect(whereMatch).not.toBeNull();
+
+        // Dirección del comparador coherente con el sentido del ORDER BY:
+        // ASC → siguiente página es "mayor"; DESC → siguiente página es "menor".
+        const comparator = whereMatch![1];
+        expect(comparator).toBe(sortDirection === "ASC" ? ">" : "<");
+
+        // El contrato del cursor no cambia: sigue siendo el id plano de la
+        // fila (el cliente web lo trata como opaco y lo reenvía tal cual).
+        expect(cursorParam).toBe(INSTANCIA_ID);
+      },
+    );
   });
 
   // -------------------------------------------------------------------------

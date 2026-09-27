@@ -405,6 +405,20 @@ export const eceCertificacionRouter = router({
       // Ninguno de los dos existía en la query original: `di.paciente_id`
       // apunta a `ece.paciente`, no a `public."Patient"`, y `ejecutado_por`
       // apunta a `ece.personal_salud`, no a `public."User"`.
+      //
+      // D5 (plan de remediación 2026-09) — keyset de paginación coherente con
+      // el ORDER BY. Antes, el cursor filtraba `di.id > $2` mientras el orden
+      // era por `creado_en`/`actualizado_en`: como el id no guarda relación
+      // con esas fechas, la página siguiente podía saltarse filas (id mayor
+      // pero fecha anterior a la ya listada) o repetirlas (id menor pero
+      // fecha posterior). El fix arma un cursor compuesto (columna de orden +
+      // id como desempate) resolviendo la fecha real de la fila-cursor con
+      // una subquery por PK — el cliente sigue mandando el mismo `id` plano
+      // de siempre, el contrato de `cursor` no cambia.
+      const sortColumn = input.incluirCertificados ? "actualizado_en" : "creado_en";
+      const sortDirection = input.incluirCertificados ? "DESC" : "ASC";
+      const cursorComparator = sortDirection === "ASC" ? ">" : "<";
+
       const baseQuery = `
         SELECT
           di.id,
@@ -434,11 +448,12 @@ export const eceCertificacionRouter = router({
         LEFT JOIN ece.personal_salud ps ON ps.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
           AND di.estado_registro = 'vigente'
-          ${input.cursor ? "AND di.id > $2::uuid" : ""}
-        ORDER BY
-          ${input.incluirCertificados
-            ? "di.actualizado_en DESC"
-            : "di.creado_en ASC"}
+          ${input.cursor
+            ? `AND (di.${sortColumn}, di.id) ${cursorComparator} (
+                 SELECT ${sortColumn}, id FROM ece.documento_instancia WHERE id = $2::uuid
+               )`
+            : ""}
+        ORDER BY di.${sortColumn} ${sortDirection}, di.id ${sortDirection}
         LIMIT ${input.cursor ? "$3" : "$2"}
       `;
 
