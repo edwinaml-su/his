@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_TENANT } from "@his/test-utils";
 
 // docs/48 §5 C3-2 — capturarCargo ya tiene su propia suite (charge-capture.test.ts);
 // aquí solo importa que admission.create/confirmarRecepcionFisica la invoquen
@@ -934,6 +935,36 @@ describe("inpatientRouter", () => {
       await expect(
         caller.carePlan.updateStatus({ id: u, status: "ACTIVE" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en todo inpatient.router.ts.
+  describe("control de rol (CC — hospitalización)", () => {
+    it("admission.discharge: FORBIDDEN para rol sin permiso médico (ADMISSION_CLERK)", async () => {
+      const caller = inpatientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMISSION_CLERK"] } }),
+      );
+      await expect(
+        caller.admission.discharge({ id: u }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("vitals.record: FORBIDDEN para rol sin permiso clínico (BODEGA)", async () => {
+      const caller = inpatientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["BODEGA"] } }),
+      );
+      await expect(
+        caller.vitals.record({ admissionId: u } as never),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("admission.list: MEDICO_AFILIADO (rol médico de las 21 orgs) puede listar admisiones", async () => {
+      prisma.inpatientAdmission.findMany.mockResolvedValue([] as never);
+      const caller = inpatientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(caller.admission.list({})).resolves.toBeDefined();
     });
   });
 });

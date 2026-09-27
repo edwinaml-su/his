@@ -31,8 +31,16 @@ import {
   type DiscriminatorOut,
   type TriageColorOut,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { CONFIG_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en este router. list/get/listForTriage son consultas de
+// catálogo usadas durante la evaluación de triage (lectura clínica);
+// setActive es parametrización admin (`/triage-config`) — sólo administración.
+const readProc = requireRole(PHI_READ_ROLES);
+const configProc = requireRole(CONFIG_ROLES);
 
 export const triageFlowchartRouter = router({
   /**
@@ -43,7 +51,7 @@ export const triageFlowchartRouter = router({
    *  - search:  ILIKE en `name` o `code`.
    *  - includeInactive: por default solo activos.
    */
-  list: tenantProcedure
+  list: readProc
     .input(listFlowchartsInputSchema)
     .query(async ({ ctx, input }): Promise<FlowchartListItem[]> => {
       const search = input?.search?.trim();
@@ -87,7 +95,7 @@ export const triageFlowchartRouter = router({
     }),
 
   /** Devuelve el flujograma + sus discriminadores ACTIVOS ordenados por ordinal. */
-  get: tenantProcedure
+  get: readProc
     .input(getFlowchartInputSchema)
     .query(async ({ ctx, input }): Promise<FlowchartDetail> => {
       const fc = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -144,7 +152,7 @@ export const triageFlowchartRouter = router({
    * Para una evaluación de triage dada, devuelve sus discriminadores activos.
    * Se filtra a nivel de evaluación → flowchart → discriminadores.active=true.
    */
-  listForTriage: tenantProcedure
+  listForTriage: readProc
     .input(listForTriageInputSchema)
     .query(async ({ ctx, input }) => {
       const { evaluation, fc, discriminators } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -214,7 +222,7 @@ export const triageFlowchartRouter = router({
     }),
 
   /** Toggle activación de flujograma (admin /triage-config). */
-  setActive: tenantProcedure
+  setActive: configProc
     .input(setFlowchartActiveInputSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {

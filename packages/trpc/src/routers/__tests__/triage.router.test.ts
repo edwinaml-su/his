@@ -12,7 +12,7 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { triageRouter } from "../triage.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
+import { MOCK_TENANT, MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
 
 describe("triageRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
@@ -337,6 +337,30 @@ describe("triageRouter", () => {
       const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
       expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
       expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+    });
+  });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en todo triage.router.ts.
+  describe("control de rol (CC — triage)", () => {
+    it("recordVitals: FORBIDDEN con rol sin permiso clínico (FACTURACION)", async () => {
+      const caller = triageRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      await expect(
+        caller.recordVitals({
+          triageEvaluationId: "00000000-0000-0000-0000-000000000090",
+          vitals: [],
+        } as never),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("listLevels: JEFE_MEDICO_SEDE (rol médico de las 21 orgs) puede leer catálogo de triage", async () => {
+      prisma.triageLevel.findMany.mockResolvedValue([] as never);
+      const caller = triageRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["JEFE_MEDICO_SEDE"] } }),
+      );
+      await expect(caller.listLevels()).resolves.toBeDefined();
     });
   });
 });

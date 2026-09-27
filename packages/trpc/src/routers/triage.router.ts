@@ -10,10 +10,19 @@ import {
   type VitalAlert,
 } from "@his/contracts";
 import { withTenantContext } from "../rls-context";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import { nextEncounterNumber } from "../lib/encounter-numbering";
 import { resolverTasaFuncional } from "../lib/exchange";
+import { CLINICAL_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en todo este router. Evaluación/vitales/discriminadores
+// son escritura clínica de triage (enfermería de triage, o médico cuando no
+// hay enfermería sembrada — ver GAP en operational-role-sets.ts); las
+// lecturas de catálogo/cola alimentan pantallas usadas por el mismo personal.
+const triageWriteProc = requireRole(CLINICAL_WRITE_ROLES);
+const readProc = requireRole(PHI_READ_ROLES);
 
 /** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
 function formatNnSuffix(d: Date): string {
@@ -100,14 +109,14 @@ function computeServerAlerts(
 
 export const triageRouter = router({
   /** Lista los niveles Manchester configurados en la organización activa. */
-  listLevels: tenantProcedure.query(async ({ ctx }) => {
+  listLevels: readProc.query(async ({ ctx }) => {
     return ctx.prisma.triageLevel.findMany({
       where: { organizationId: ctx.tenant.organizationId, active: true },
       orderBy: { priority: "asc" },
     });
   }),
 
-  listFlowcharts: tenantProcedure
+  listFlowcharts: readProc
     .input(z.object({ pediatric: z.boolean().optional() }).optional())
     .query(async ({ ctx, input }) => {
       return ctx.prisma.triageFlowchart.findMany({
@@ -120,7 +129,7 @@ export const triageRouter = router({
       });
     }),
 
-  getDiscriminators: tenantProcedure
+  getDiscriminators: readProc
     .input(z.object({ flowchartId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return ctx.prisma.triageDiscriminator.findMany({
@@ -131,7 +140,7 @@ export const triageRouter = router({
     }),
 
   /** Cola de triage: encuentros sin alta y sin evaluación COMPLETED hoy. */
-  listPending: tenantProcedure.query(async ({ ctx }) => {
+  listPending: readProc.query(async ({ ctx }) => {
     const since = new Date();
     since.setHours(0, 0, 0, 0);
 
@@ -172,7 +181,7 @@ export const triageRouter = router({
     });
   }),
 
-  createEvaluation: tenantProcedure
+  createEvaluation: triageWriteProc
     .input(triageEvaluationCreateSchema)
     .mutation(async ({ ctx, input }) => {
       if (!ctx.tenant.establishmentId) {
@@ -210,7 +219,7 @@ export const triageRouter = router({
    *  - NOT_FOUND   — evaluation inexistente o de otro tenant.
    *  - CONFLICT    — evaluation ya `COMPLETED` (transición irreversible).
    */
-  setAssignedLevel: tenantProcedure
+  setAssignedLevel: triageWriteProc
     .input(setAssignedLevelInputSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -284,7 +293,7 @@ export const triageRouter = router({
    * escrito por el discriminador final. Si el caller necesita reportar el
    * nivel "real" mientras tanto, status sigue IN_PROGRESS.
    */
-  quickIntake: tenantProcedure
+  quickIntake: triageWriteProc
     .input(quickIntakeInputSchema)
     .mutation(async ({ ctx, input }) => {
       if (!ctx.tenant.establishmentId) {
@@ -432,7 +441,7 @@ export const triageRouter = router({
    * US-6.2 — Captura bulk de signos vitales en una evaluación abierta.
    * Devuelve las alertas computadas (no se persisten — TODO Sprint 6).
    */
-  recordVitals: tenantProcedure
+  recordVitals: triageWriteProc
     .input(recordVitalsInputSchema)
     .mutation(async ({ ctx, input }) => {
       const evaluation = await ctx.prisma.triageEvaluation.findFirst({
@@ -491,7 +500,7 @@ export const triageRouter = router({
    * US-6.1 / US-6.2 — contadores para el dashboard de recepción.
    * Útil para mostrar "X esperando triage", "Y con vitales pendientes".
    */
-  dashboardCounts: tenantProcedure.query(async ({ ctx }) => {
+  dashboardCounts: readProc.query(async ({ ctx }) => {
     const since = new Date();
     since.setHours(0, 0, 0, 0);
 

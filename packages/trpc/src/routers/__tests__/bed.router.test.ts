@@ -424,4 +424,27 @@ describe("bedRouter", () => {
       expect(prisma.bed.update).not.toHaveBeenCalled();
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — list/getMap/updateStatus/findAvailable/assignToEncounter/release
+  // corrían sobre `tenantProcedure` puro (a diferencia de adminList/create/
+  // update/setActive, ya gateados con `adminProc`).
+  describe("control de rol (CC — camas)", () => {
+    it("assignToEncounter: FORBIDDEN para rol sin permiso de admisión (CONTRALOR_CORP)", async () => {
+      const caller = bedRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["CONTRALOR_CORP"] } }),
+      );
+      await expect(
+        caller.assignToEncounter({ bedId: BED_ID, encounterId: BED_ID }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("list: MEDICO_AFILIADO (rol médico de las 21 orgs) puede listar camas", async () => {
+      prisma.bed.findMany.mockResolvedValue([] as never);
+      const caller = bedRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(caller.list({})).resolves.toBeDefined();
+    });
+  });
 });

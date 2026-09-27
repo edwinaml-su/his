@@ -31,7 +31,7 @@ import {
   listPendingArrivalsInput,
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
@@ -39,9 +39,23 @@ import { resolveLocationGln } from "../lib/gln-resolver";
 import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
 import { capturarCargo } from "../lib/charge-capture";
 import type { PrismaClient } from "@prisma/client";
+import { ADMISSION_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado (ADR 0019 D1/D6, mismo valor que encounter.router.ts). */
 const FALLBACK_GS1_PREFIX = "7503000";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole`. Mover un paciente de servicio/cama y confirmar su
+// recepción física son operaciones asistenciales/logísticas — mismo set que
+// `bed`/`inpatient` (ADMISSION_WRITE_ROLES). `confirmReceipt` documentaba
+// "cualquier usuario autenticado del tenant" como decisión deliberada porque
+// el modelo de "ownership de servicio" no vive en `User` — eso sigue siendo
+// cierto para el FILTRO POR SERVICIO (vive en la UI), pero el hallazgo de
+// auditoría exige igualmente un piso de ROL: cualquier miembro del personal
+// operativo puede confirmar, no cualquier rol del tenant (ej. BODEGA/
+// CONTRALOR_CORP no deberían poder).
+const writeProc = requireRole(ADMISSION_WRITE_ROLES);
+const readProc = requireRole(PHI_READ_ROLES);
 
 export const encounterTransferRouter = router({
   /**
@@ -62,7 +76,7 @@ export const encounterTransferRouter = router({
   // aceptado y documentado; requiere resolverse ampliando el GRANT/policy de
   // AuditLog para `authenticated` (fuera de scope: cambio de BD, coordinar
   // con @DBA) antes de reintentar esta migración.
-  transferEncounter: tenantProcedure
+  transferEncounter: writeProc
     .input(transferEncounterInput)
     .mutation(async ({ ctx, input }) => {
       return ctx.prisma.$transaction(async (tx) => {
@@ -303,7 +317,7 @@ export const encounterTransferRouter = router({
     }),
 
   /** Histórico de traslados de un encuentro (orden cronológico). */
-  listByEncounter: tenantProcedure
+  listByEncounter: readProc
     .input(listTransfersByEncounterInput)
     .query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -332,7 +346,7 @@ export const encounterTransferRouter = router({
    * Listado paginado de traslados recientes de la organización para el
    * tablero `/transfers`. Filtro opcional por servicio destino.
    */
-  listRecent: tenantProcedure
+  listRecent: readProc
     .input(listRecentTransfersInput)
     .query(async ({ ctx, input }) => {
       const where = {
@@ -380,7 +394,7 @@ export const encounterTransferRouter = router({
    * Si no se pasa `toServiceUnitId`, devuelve todos los pendientes del
    * tenant (vista admin / supervisor).
    */
-  listPendingArrivals: tenantProcedure
+  listPendingArrivals: readProc
     .input(listPendingArrivalsInput)
     .query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -430,7 +444,7 @@ export const encounterTransferRouter = router({
   // (`patient.transfer.confirmed`) escribe AuditLog sin GRANT INSERT para
   // `authenticated`, y el evento EPCIS de arribo debe ser atómico con el
   // cambio de estado (ADR 0019 D7).
-  confirmReceipt: tenantProcedure
+  confirmReceipt: writeProc
     .input(confirmReceiptInput)
     .mutation(async ({ ctx, input }) => {
       return ctx.prisma.$transaction(async (tx) => {

@@ -1245,4 +1245,45 @@ describe("patientRouter", () => {
       expect(prisma.patient.findFirst).not.toHaveBeenCalled();
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en la mayoría de procedures de este router.
+  describe("control de rol (CC — pacientes)", () => {
+    it("create: FORBIDDEN para rol sin permiso de registro (BODEGA)", async () => {
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["BODEGA"] } }),
+      );
+      await expect(
+        caller.create({
+          firstName: "Ana",
+          lastName: "Gómez",
+          birthDate: new Date("1990-01-01"),
+          biologicalSexId: "00000000-0000-0000-0000-000000000050",
+        } as never),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("mergePatients: FORBIDDEN para personal asistencial de piso (NURSE) — es gobierno de datos maestros", async () => {
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.mergePatients({
+          fromPatientId: "00000000-0000-0000-0000-000000000f01",
+          toPatientId: "00000000-0000-0000-0000-000000000f02",
+          justification: "duplicado confirmado",
+          fieldsToTake: {},
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("search: MEDICO_AFILIADO (rol médico de las 21 orgs) puede buscar pacientes", async () => {
+      setupTx();
+      prisma.patient.findMany.mockResolvedValue([] as never);
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(caller.search({ query: "Gomez" })).resolves.toBeDefined();
+    });
+  });
 });

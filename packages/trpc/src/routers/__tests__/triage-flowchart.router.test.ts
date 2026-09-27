@@ -138,4 +138,25 @@ describe("triageFlowchartRouter", () => {
       expect(out.active).toBe(false);
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en este router.
+  describe("control de rol (CC — triage)", () => {
+    it("setActive: FORBIDDEN con rol operativo sin permiso de configuración (NURSE)", async () => {
+      const caller = triageFlowchartRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.setActive({ id: "00000000-0000-0000-0000-000000000010", active: false }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("list: MEDICO_AFILIADO (rol médico de las 21 orgs) puede leer flujogramas", async () => {
+      prisma.triageFlowchart.findMany.mockResolvedValue([] as never);
+      const caller = triageFlowchartRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(caller.list({ includeInactive: false })).resolves.toBeDefined();
+    });
+  });
 });

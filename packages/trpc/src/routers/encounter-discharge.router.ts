@@ -31,13 +31,22 @@ import {
   epicrisisInput,
   type EpicrisisDoc,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
 import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
 import { hasCuentaActiva } from "../lib/egreso-fisico-gate";
+import { DISCHARGE_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole`. El alta médica es una decisión clínica exclusiva del
+// médico tratante (con respaldo de admin clínico); la lectura de epicrisis
+// es consultada por el resto del personal asistencial para continuidad de
+// cuidado.
+const dischargeProc = requireRole(DISCHARGE_WRITE_ROLES);
+const readProc = requireRole(PHI_READ_ROLES);
 
 /**
  * Heurística para identificar el sistema CIE-10 entre los CodeSystem
@@ -49,7 +58,7 @@ const CIE10_CODES = ["CIE-10", "CIE10", "ICD-10", "ICD10"] as const;
 const FALLBACK_GS1_PREFIX = "7503000";
 
 export const encounterDischargeRouter = router({
-  dischargeEncounter: tenantProcedure
+  dischargeEncounter: dischargeProc
     .input(dischargeEncounterInput)
     .mutation(async ({ ctx, input }) => {
       if (input.dischargeType === "DEATH") {
@@ -246,7 +255,7 @@ export const encounterDischargeRouter = router({
    * tabla dedicada aún no existe, reconstruye el documento desde
    * `AuditLog` + datos del encuentro.
    */
-  epicrisis: tenantProcedure
+  epicrisis: readProc
     .input(epicrisisInput)
     .query(async ({ ctx, input }) => {
       // R02 — solo lectura (Encounter + AuditLog.SELECT tienen policy RLS

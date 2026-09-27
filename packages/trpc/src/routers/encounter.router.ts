@@ -9,8 +9,9 @@ import {
   validateGSRN,
 } from "@his/contracts";
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { ADMISSION_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
 import { applyWorkflowContext } from "../workflow/context";
 import {
   isOutOfServiceUnitScope,
@@ -36,6 +37,14 @@ function serialFromMrn(mrn: string): number {
   return Array.from(mrn).reduce((acc, c) => acc + c.charCodeAt(0), 0) % 1_000_000;
 }
 
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — este router corría íntegro sobre `tenantProcedure` (sólo sesión+org, sin
+// rol). `admit` es la admisión de un encuentro (ER sin front-desk disponible
+// admite directo) — usa ADMISSION_WRITE_ROLES (asistencial + front-desk). Las
+// lecturas (list/listOpenByOrg/getCensus) alimentan el tablero ADT — usa
+// PHI_READ_ROLES.
+const admitProc = requireRole(ADMISSION_WRITE_ROLES);
+const readProc = requireRole(PHI_READ_ROLES);
 
 export const encounterRouter = router({
   /**
@@ -62,7 +71,7 @@ export const encounterRouter = router({
    *   - Campos opcionales del wizard (chiefComplaint, valuables, etc.)
    *     llegan al contrato pero no se persisten aún (TODO Sprint 4).
    */
-  admit: tenantProcedure.input(admitSchema).mutation(async ({ ctx, input }) => {
+  admit: admitProc.input(admitSchema).mutation(async ({ ctx, input }) => {
     if (!ctx.tenant.establishmentId) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -394,7 +403,7 @@ export const encounterRouter = router({
     });
   }),
 
-  list: tenantProcedure.input(encounterListSchema).query(async ({ ctx, input }) => {
+  list: readProc.input(encounterListSchema).query(async ({ ctx, input }) => {
     // CC-0033 (P0-1) — antes leía por `ctx.prisma` directo (rol BYPASSRLS): el
     // filtro `organizationId` en `where` era la ÚNICA defensa. withTenantContext
     // demota a `authenticated` para que RLS real también aplique.
@@ -436,7 +445,7 @@ export const encounterRouter = router({
    * búsqueda por nombre o MRN del paciente, y filtros por tipo de admisión
    * y servicio. Pensado para tablero ADT (US-5.4).
    */
-  listOpenByOrg: tenantProcedure
+  listOpenByOrg: readProc
     .input(encounterListOpenByOrgSchema)
     .query(async ({ ctx, input }) => {
       const q = input.query?.trim();
@@ -504,7 +513,7 @@ export const encounterRouter = router({
    *
    * Para futuro tablero (US-5.4) se exponen los breakdowns agregados.
    */
-  getCensus: tenantProcedure
+  getCensus: readProc
     .input(encounterCensusSchema)
     .query(async ({ ctx, input }) => {
       if (input?.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {

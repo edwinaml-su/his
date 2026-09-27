@@ -31,13 +31,22 @@ import {
   type TriageMonitorItem,
   type TriageMonitorResponse,
 } from "@his/contracts/schemas/triage-monitor";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
 import { TRPCError } from "@trpc/server";
+import { CLINICAL_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en este router (tablero de triage con cronómetros).
+// queueWithTimers/monitorWallboard son lectura clínica de la cola de
+// emergencia; closeEvaluation es una transición de estado de triage
+// (equivalente a la escritura de triage.router.ts).
+const readProc = requireRole(PHI_READ_ROLES);
+const closeProc = requireRole(CLINICAL_WRITE_ROLES);
 
 /** elapsed / max → NORMAL (<70%) / WARNING (70-100%) / CRITICAL (>100%). */
 function severityFor(elapsedMinutes: number, maxMinutes: number): TriageTimerSeverity {
@@ -73,7 +82,7 @@ export const triageDashboardRouter = router({
    *    detectar nuevos ingresos; el segundero local del TriageTimer no
    *    depende de la red.
    */
-  queueWithTimers: tenantProcedure
+  queueWithTimers: readProc
     .input(triageDashboardFiltersSchema.optional())
     .query(async ({ ctx, input }): Promise<TriageQueueResponse> => {
       const filters = input ?? { onlyActive: true };
@@ -231,7 +240,7 @@ export const triageDashboardRouter = router({
    * MVP: solo emite el cambio de status; la transición real con auditoría se
    * añadirá en US-6.7 cuando se integre con `encounter`.
    */
-  closeEvaluation: tenantProcedure
+  closeEvaluation: closeProc
     .input(z.object({ triageEvaluationId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -268,7 +277,7 @@ export const triageDashboardRouter = router({
    *      COMPLETED sin actividad clínica (WAITING_DOCTOR)
    *  - Devuelve items pre-agrupados por color (5 lanes), sin separar.
    */
-  monitorWallboard: tenantProcedure
+  monitorWallboard: readProc
     .input(
       z
         .object({

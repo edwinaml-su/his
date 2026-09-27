@@ -1404,4 +1404,29 @@ describe("patientAccountRouter", () => {
       });
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — crear/agregarServicio/listarPorPaciente/listarWorklist/cerrar/
+  // liquidacion corrían sobre `tenantProcedure` puro.
+  describe("control de rol (CC — cuentas de paciente)", () => {
+    it("cerrar: FORBIDDEN para rol asistencial sin permiso financiero (NURSE)", async () => {
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.cerrar({ accountId: ACCOUNT_ID }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("listarPorPaciente: LAB_TECHNICIAN puede leer cuentas — `selector-cuenta.tsx` se usa desde lab/imaging/vitales", async () => {
+      setupTx();
+      prisma.patientAccount.findMany.mockResolvedValue([] as never);
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["LAB_TECHNICIAN"] } }),
+      );
+      await expect(
+        caller.listarPorPaciente({ patientId: "00000000-0000-0000-0000-000000000f10" }),
+      ).resolves.toBeDefined();
+    });
+  });
 });
