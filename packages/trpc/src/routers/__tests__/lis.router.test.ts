@@ -61,6 +61,11 @@ describe("lisRouter", () => {
     // tarea.id / en la iteración de resolveLabSlaMap.
     prisma.careTask.create.mockResolvedValue({ id: w } as never);
     prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
+    // P1-13/B29 — default sin filas estratificadas: preserva el fallback
+    // Wave 1 (heurística ±50%) para todos los tests de result.enter que no
+    // configuran explícitamente LabReferenceRange, igual que en prod hoy
+    // (0 filas verificado 2026-09-27).
+    prisma.labReferenceRange.findMany.mockResolvedValue([] as never);
   });
 
   describe("panel.list", () => {
@@ -880,6 +885,175 @@ describe("lisRouter", () => {
         });
 
         expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * P1-13/B29 (docs/audit/2026-09-15_cobertura/02-hc-farmacia-lab-imagen.md)
+     * — `result.enter` debe preferir `LabReferenceRange` estratificado por
+     * edad/sexo sobre la heurística sintética ±50%, pero SOLO cuando al
+     * menos una fila aplica al paciente; si no, cae exacto al fallback
+     * Wave 1 vigente hoy en prod (LabReferenceRange tiene 0 filas al
+     * 2026-09-27, verificado por consulta directa).
+     */
+    describe("P1-13/B29 — LabReferenceRange estratificado (edad/sexo)", () => {
+      const STRAT_PATIENT_ID = "00000000-0000-0000-0000-0000000000dd";
+      const now = Date.now();
+      const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
+      const ADULT_BIRTHDATE = new Date(now - 40 * YEAR_MS);
+      const PEDIATRIC_BIRTHDATE = new Date(now - 5 * YEAR_MS);
+
+      const pediatricRow = {
+        minValue: { toNumber: () => 60 },
+        maxValue: { toNumber: () => 110 },
+        ageMinYears: 0,
+        ageMaxYears: 12,
+        sex: "BOTH",
+        criticalLow: { toNumber: () => 30 },
+        criticalHigh: { toNumber: () => 180 },
+      };
+      const adultRow = {
+        minValue: { toNumber: () => 70 },
+        maxValue: { toNumber: () => 100 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "BOTH",
+        criticalLow: { toNumber: () => 40 },
+        criticalHigh: { toNumber: () => 400 },
+      };
+      const maleHemoglobin = {
+        minValue: { toNumber: () => 13.5 },
+        maxValue: { toNumber: () => 17.5 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "MALE",
+        criticalLow: { toNumber: () => 7 },
+        criticalHigh: { toNumber: () => 20 },
+      };
+      const femaleHemoglobin = {
+        minValue: { toNumber: () => 12.0 },
+        maxValue: { toNumber: () => 15.5 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "FEMALE",
+        criticalLow: { toNumber: () => 7 },
+        criticalHigh: { toNumber: () => 20 },
+      };
+
+      function mockItem(overrides?: { critical?: boolean }) {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          testId: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: overrides?.critical ?? false,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v, patientId: STRAT_PATIENT_ID },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      }
+
+      function mockPatient(birthDate: Date, sexCode: "M" | "F" | null) {
+        prisma.patient.findUnique.mockResolvedValue({
+          birthDate,
+          biologicalSex: sexCode ? { code: sexCode } : null,
+        } as never);
+      }
+
+      it("paciente pediátrico: mismo valor cae dentro del rango pediátrico (NORMAL)", async () => {
+        mockItem();
+        mockPatient(PEDIATRIC_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow, adultRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 105, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("paciente adulto: mismo valor (105) queda HIGH bajo el rango adulto", async () => {
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow, adultRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 105, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("HIGH");
+      });
+
+      it("estratifica por sexo: MALE 12.2 → LOW (bajo 13.5)", async () => {
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, "M");
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          maleHemoglobin,
+          femaleHemoglobin,
+        ] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 12.2, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("LOW");
+      });
+
+      it("estratifica por sexo: FEMALE 12.2 → NORMAL (dentro de 12.0-15.5)", async () => {
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, "F");
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          maleHemoglobin,
+          femaleHemoglobin,
+        ] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 12.2, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("sin fila aplicable (solo pediátrica, paciente adulto) → fallback heurístico idéntico al actual", async () => {
+        mockItem(); // refRangeLow=70/High=100/critical=false — mismo fixture que el test Wave 1 pre-existente.
+        mockPatient(ADULT_BIRTHDATE, null);
+        // Solo existe una fila pediátrica (0-12) — no aplica a un adulto de 40.
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 130, flag: "NORMAL" });
+        // Mismo resultado que "Beta.3 — calcula flag HIGH automáticamente desde refRange".
+        expect(r.finalFlag).toBe("HIGH");
+        expect(r.isCritical).toBe(false);
+      });
+
+      it("ruta crítica vía rango estratificado (no heurística) sigue disparando lab.criticalValue + createCriticalResultNotification", async () => {
+        // critical=false en el LabTest: si la ruta usara la heurística Wave 1
+        // (que exige test.critical=true para calcular criticalLow/High), NO
+        // habría criticalHigh y el resultado no podría ser crítico. Que el
+        // flag salga CRITICAL_HIGH prueba que se usó criticalHigh=130 de la
+        // fila estratificada, no la heurística.
+        mockItem({ critical: false });
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          { ...adultRow, criticalHigh: { toNumber: () => 130 } },
+        ] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+        const PERSONAL_ID = "00000000-0000-0000-0000-0000000000ee";
+        const NOTIF_ID = "00000000-0000-0000-0000-0000000000ff";
+        (prisma.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+          (strings: TemplateStringsArray) => {
+            const sql = strings.join(" ");
+            if (sql.includes("ece.personal_salud")) {
+              return Promise.resolve([{ id: PERSONAL_ID, nombre_completo: "Dr. Test" }]);
+            }
+            if (sql.includes("INSERT INTO ece.critical_result_notification")) {
+              return Promise.resolve([{ id: NOTIF_ID, notificado_en: new Date() }]);
+            }
+            return Promise.resolve([]);
+          },
+        );
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 140, flag: "NORMAL" });
+
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        expect(r.isCritical).toBe(true);
+        const eventTypes = prisma.domainEvent.create.mock.calls.map(
+          (c) => (c[0] as { data: { eventType: string } }).data.eventType,
+        );
+        expect(eventTypes).toEqual(["lab.criticalValue", "critical_result.emitted"]);
       });
     });
   });

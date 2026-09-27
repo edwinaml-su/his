@@ -296,6 +296,46 @@ export interface ReflexRule {
 // ---------------------------------------------------------------------------
 
 /**
+ * P1-13/B29 (auditoría 2026-09-15) — filtro compartido de aplicabilidad:
+ * un rango aplica a un paciente si su sexo coincide (o el rango/paciente es
+ * BOTH) y la edad del paciente cae dentro de [ageMinYears, ageMaxYears]
+ * (límites INCLUSIVOS; null = sin restricción en ese extremo). Sin edad
+ * conocida (age=null), la edad nunca descarta un rango.
+ * Extraído de `evaluateLabResultFlag` para que `result.enter` (lis.router)
+ * pueda decidir, con el mismo criterio, si existe algún rango estratificado
+ * (`LabReferenceRange`) aplicable antes de recurrir al fallback heurístico.
+ */
+function filterApplicableRanges(
+  ranges: LabReferenceRange[],
+  age: number | null,
+  sex: LisSex,
+): LabReferenceRange[] {
+  return ranges.filter((r) => {
+    const sexMatch = r.sex === "BOTH" || r.sex === sex || sex === "BOTH";
+    const ageMatch =
+      age === null ||
+      ((r.ageMinYears === null || age >= r.ageMinYears) &&
+        (r.ageMaxYears === null || age <= r.ageMaxYears));
+    return sexMatch && ageMatch;
+  });
+}
+
+/**
+ * P1-13/B29 — true si al menos un rango de `ranges` aplica al paciente
+ * (mismo criterio que `evaluateLabResultFlag`). Úsese para decidir entre
+ * un catálogo estratificado real (`LabReferenceRange`) y un fallback
+ * sintético: solo tiene sentido preferir el estratificado si de verdad
+ * cubre a este paciente.
+ */
+export function hasApplicableReferenceRange(
+  ranges: LabReferenceRange[],
+  age: number | null | undefined,
+  sex: LisSex | null | undefined,
+): boolean {
+  return filterApplicableRanges(ranges, age ?? null, sex ?? "BOTH").length > 0;
+}
+
+/**
  * Evalúa el flag apropiado para un resultado numérico contra reference range
  * estratificado por edad/sexo. Si no se proporcionan rangos, retorna NORMAL.
  * Si valueNumeric es null/undefined, retorna NORMAL (resultados cualitativos
@@ -315,14 +355,7 @@ export function evaluateLabResultFlag(input: {
   const age = input.patientAgeYears ?? null;
 
   // Selecciona la mejor regla matching (más específica primero).
-  const candidates = input.ranges.filter((r) => {
-    const sexMatch = r.sex === "BOTH" || r.sex === sex || sex === "BOTH";
-    const ageMatch =
-      age === null ||
-      ((r.ageMinYears === null || age >= r.ageMinYears) &&
-        (r.ageMaxYears === null || age <= r.ageMaxYears));
-    return sexMatch && ageMatch;
-  });
+  const candidates = filterApplicableRanges(input.ranges, age, sex);
   if (candidates.length === 0) return "NORMAL";
 
   // Prefiere reglas con sex/edad específicos > generales (BOTH/null).

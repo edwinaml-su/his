@@ -40,6 +40,7 @@ import {
   resultEnterWithPatientContextInput,
   resultValidateInput,
   evaluateLabResultFlag,
+  hasApplicableReferenceRange,
   isCriticalFlag,
   labPanelCreateInput,
   labPanelUpdateInput,
@@ -1846,6 +1847,10 @@ export const lisRouter = router({
      * Beta.3 — enter con auto-flagging por reference ranges.
      * - Carga el LabTest del item para obtener refRangeLow/refRangeHigh y flag critical.
      * - Si `forceFlagOverride=false` (default) recalcula el flag desde refs.
+     * - P1-13/B29: primero intenta `LabReferenceRange` estratificado por
+     *   edad/sexo del paciente; si ninguna fila aplica, cae al fallback
+     *   Wave 1 (heurística ±50% sobre refRangeLow/High) — ver comentario
+     *   inline antes de la query para las reglas de selección.
      * - Si `valueNumeric` provisto y tests con criticalFlag → mapea a CRITICAL_*.
      * - Retorna alerts inline si el flag es crítico.
      *
@@ -1895,12 +1900,61 @@ export const lisRouter = router({
           // Beta.3 — Determinar el flag final.
           let finalFlag: LisResultFlag = input.flag;
           if (!input.forceFlagOverride && input.valueNumeric != null) {
-            // Construir reference range desde el test (Wave 1: solo BOTH/adult).
-            const ranges: LabReferenceRange[] = buildReferenceRangesFromTest({
-              refRangeLow: item.test.refRangeLow,
-              refRangeHigh: item.test.refRangeHigh,
-              critical: item.test.critical,
+            // P1-13/B29 (auditoría 2026-09-15, docs/audit/2026-09-15_cobertura/
+            // 02-hc-farmacia-lab-imagen.md) — antes de recurrir a la
+            // heurística sintética ±50% (Wave 1), consulta el catálogo real
+            // `LabReferenceRange` (rangos estratificados por edad/sexo,
+            // sql/27_lis_hardening_v2 + RLS sql/41: global si
+            // organizationId IS NULL, o del tenant).
+            //
+            // Regla de selección (documentada porque gobierna una decisión
+            // clínica): se usan las filas de `LabReferenceRange` SOLO si al
+            // menos una es aplicable al paciente — mismo sexo (o BOTH) y
+            // edad a la fecha de toma dentro de [ageMinYears, ageMaxYears]
+            // con límites INCLUSIVOS (`hasApplicableReferenceRange`,
+            // idéntico criterio que usa luego `evaluateLabResultFlag` para
+            // rankear candidatos: sexo específico + bracket de edad > solo
+            // uno de los dos > BOTH sin edad). Si ninguna fila aplica
+            // —incluyendo el caso sin filas en absoluto (LabReferenceRange tiene 0 filas
+            // en prod al 2026-09-27, verificado por consulta directa)— se
+            // conserva EXACTO el fallback Wave 1 (`buildReferenceRangesFromTest`,
+            // heurística ±50% sobre LabTest.refRangeLow/High) para no alterar
+            // el comportamiento ya vigente. Los límites normales de
+            // `LabReferenceRange` son minValue EXCLUSIVO / maxValue EXCLUSIVO
+            // y los críticos criticalLow/criticalHigh INCLUSIVOS — igual que
+            // en el fallback (ver `evaluateLabResultFlag`).
+            const dbRanges = await tx.labReferenceRange.findMany({
+              where: { labTestId: item.testId, active: true },
+              select: {
+                minValue: true,
+                maxValue: true,
+                ageMinYears: true,
+                ageMaxYears: true,
+                sex: true,
+                criticalLow: true,
+                criticalHigh: true,
+              },
             });
+            const stratifiedRanges: LabReferenceRange[] = dbRanges.map((r) => ({
+              minValue: decimalToNullableNumber(r.minValue),
+              maxValue: decimalToNullableNumber(r.maxValue),
+              ageMinYears: r.ageMinYears,
+              ageMaxYears: r.ageMaxYears,
+              sex: r.sex as LisSex,
+              criticalLow: decimalToNullableNumber(r.criticalLow),
+              criticalHigh: decimalToNullableNumber(r.criticalHigh),
+            }));
+            const ranges: LabReferenceRange[] = hasApplicableReferenceRange(
+              stratifiedRanges,
+              patientAgeYears,
+              patientSex,
+            )
+              ? stratifiedRanges
+              : buildReferenceRangesFromTest({
+                  refRangeLow: item.test.refRangeLow,
+                  refRangeHigh: item.test.refRangeHigh,
+                  critical: item.test.critical,
+                });
             finalFlag = evaluateLabResultFlag({
               valueNumeric: input.valueNumeric,
               ranges,

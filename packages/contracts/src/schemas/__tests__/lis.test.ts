@@ -20,6 +20,7 @@ import {
   resultValidateInput,
   resultEnterWithPatientContextInput,
   evaluateLabResultFlag,
+  hasApplicableReferenceRange,
   isCriticalFlag,
   applyReflexRules,
   canTransitionLabOrder,
@@ -373,6 +374,48 @@ describe("Beta.3 — evaluateLabResultFlag", () => {
         patientAgeYears: 30,
       }),
     ).toBe("NORMAL"));
+});
+
+describe("P1-13/B29 — hasApplicableReferenceRange", () => {
+  const pediatricGlucose: LabReferenceRange = {
+    minValue: 60,
+    maxValue: 110,
+    ageMinYears: 0,
+    ageMaxYears: 12,
+    sex: "BOTH",
+    criticalLow: 30,
+    criticalHigh: 180,
+  };
+  const adultHemoglobinMale: LabReferenceRange = {
+    minValue: 13.5,
+    maxValue: 17.5,
+    ageMinYears: 18,
+    ageMaxYears: null,
+    sex: "MALE",
+    criticalLow: 7,
+    criticalHigh: 20,
+  };
+
+  it("false para lista vacía (sin filas en catálogo → fallback)", () =>
+    expect(hasApplicableReferenceRange([], 30, "BOTH")).toBe(false));
+
+  it("false si la única fila no aplica por edad (adulto vs rango pediátrico)", () =>
+    expect(hasApplicableReferenceRange([pediatricGlucose], 40, "BOTH")).toBe(false));
+
+  it("true si la edad cae dentro del bracket (límites inclusivos: 12 años exacto)", () =>
+    expect(hasApplicableReferenceRange([pediatricGlucose], 12, "BOTH")).toBe(true));
+
+  it("false si sexo específico no coincide con el del paciente", () =>
+    expect(hasApplicableReferenceRange([adultHemoglobinMale], 30, "FEMALE")).toBe(false));
+
+  it("true si sexo coincide y edad aplica", () =>
+    expect(hasApplicableReferenceRange([adultHemoglobinMale], 30, "MALE")).toBe(true));
+
+  it("age=null nunca descarta por edad (trata como aplicable si sexo matchea)", () =>
+    expect(hasApplicableReferenceRange([adultHemoglobinMale], null, "MALE")).toBe(true));
+
+  it("age/sex undefined se tratan como null/BOTH", () =>
+    expect(hasApplicableReferenceRange([pediatricGlucose], undefined, undefined)).toBe(true));
 });
 
 describe("Beta.3 — isCriticalFlag", () => {
