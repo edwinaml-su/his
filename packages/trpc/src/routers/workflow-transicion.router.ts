@@ -7,6 +7,14 @@
  *
  * Roles: DIR, WORKFLOW_DESIGNER.
  * Spec: docs/backlog/fase2/_insumos/05_motor_workflow.sql
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext/withEceContext. `ece.flujo_transicion`/`ece.flujo_estado`/
+ * `ece.documento_rol`/`ece.rol` son catalogo GLOBAL (mismo razonamiento que
+ * workflow-estado.router.ts). Verificado en prod (read-only): solo tienen
+ * policy `catalogo_read_all` (SELECT, qual=true) - sin policy de escritura
+ * para `authenticated`, demotar rompería create/update/delete. Control de
+ * acceso real: `requireRole(["DIR","WORKFLOW_DESIGNER"])`.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

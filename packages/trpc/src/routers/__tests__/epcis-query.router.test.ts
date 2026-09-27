@@ -14,13 +14,14 @@
  *   7. queryByOrigin — falla si no se provee ni glnOrigen ni glnDestino
  *   8. queryRecent — devuelve últimos N eventos
  *   9. queryByGln — sin rol autorizado lanza FORBIDDEN
+ *  10. queryByGln — corre dentro del contexto de withTenantContext (R02, CC-0033)
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { epcisQueryRouter } from "../epcis-query.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -56,6 +57,10 @@ describe("epcisQueryRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02 — el router ahora envuelve las 4 queries en withTenantContext.
+    // installTenantContextMock hace que `tx === prisma` dentro del callback,
+    // así los mocks de $queryRawUnsafe de cada test siguen aplicando igual.
+    installTenantContextMock(prisma);
   });
 
   // ── 1. queryByGln — happy path ───────────────────────────────────────────────
@@ -187,5 +192,30 @@ describe("epcisQueryRouter", () => {
     await expect(
       caller.queryByGln({ gln: GLN_A }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // ── 10. queryByGln — corre dentro de withTenantContext (R02) ───────────────
+
+  it("queryByGln aplica el contexto tenant (SET LOCAL + demote) antes de consultar", async () => {
+    // Spies propios (en vez de installTenantContextMock, que reemplaza estos
+    // métodos por funciones planas) para poder aseverar orden/invocación.
+    const executeRawUnsafeSpy = vi.fn().mockResolvedValue(0);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$executeRawUnsafe = executeRawUnsafeSpy;
+    const transactionSpy = vi.fn((fn: (tx: unknown) => unknown) => fn(prisma));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$transaction = transactionSpy;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe = vi.fn().mockResolvedValue([]);
+
+    const caller = epcisQueryRouter.createCaller(makeCtx({ prisma }));
+    await caller.queryByGln({ gln: GLN_A });
+
+    // withTenantContext abre una $transaction y, dentro, setea el GUC de
+    // organización + demota el rol ANTES de correr la query raw.
+    expect(transactionSpy).toHaveBeenCalledOnce();
+    expect(executeRawUnsafeSpy).toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((prisma as any).$queryRawUnsafe).toHaveBeenCalledOnce();
   });
 });

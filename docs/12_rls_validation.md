@@ -139,3 +139,45 @@ Tablas con RLS habilitada en `01_rls_policies.sql`:
 | `packages/database/sql/04_rls_session_helpers.sql`      | Helpers GUC + `set_tenant_context`.  |
 | `packages/trpc/src/rls-context.ts`                      | Wrapper TS (`withTenantContext`).    |
 | `packages/trpc/src/__tests__/rls-isolation.test.ts`     | Suite Vitest (gated por `RUN_RLS_TESTS`). |
+
+## 9. Routers sin contexto RLS — decisiones 2026-09-27 (R02)
+
+Cierre del residual de R02 (auditoría RLS externa): 18 routers detectados sin
+`withTenantContext`/`withPortalContext`/`withEceContext`. Metodología: para
+cada uno se identificaron las tablas tocadas, si son catálogo global o
+tenant/PHI-scoped, y se verificó en prod (solo lectura, `mcp__Supabase__execute_sql`
+contra `ejacvsgbewcerxtjtwto`) si existe RLS y qué policies aplican al rol
+`authenticated`. Decisión **(a)** = migrado en este PR; **(b)** = privilegio
+mantenido con justificación (comentario `R02 (auditoria RLS externa...)` en
+la cabecera del propio archivo); **pendiente** = requiere una policy nueva no
+aplicada aquí (ver `packages/database/sql/268_r02_policies_routers_residuales.sql`).
+
+| Router (procedure) | Tablas | Tenant-scoped / global | Decisión | Razón |
+|---|---|---|---|---|
+| `audit-integrity.router.ts` | `audit."AuditLog"` (vía `fn_verify_chain`/`fn_chain_stats`) | Tenant-scoped (`auditlog_tenant_select`), pero el router audita la cadena COMPLETA a propósito | (b) | Demotar filtraría el `count(*)`/la cadena por `organizationId`, invalidando la verificación global. Acceso ya restringido a `super_admin`/`admin_clinico`. |
+| `country.router.ts` | `Country`, `CountryCurrency` | Global (sin `organizationId`) | (b) | Únicas policies son `*_select_all` (SELECT, `qual=true`); sin policy de escritura para `authenticated` — demotar rompe create/update/deactivate/activate. |
+| `currency.router.ts` | `Currency`, `ExchangeRate` | Global | (b) | Router 100% lectura; policies `*_select_all` ya abiertas, sin restricción de tenant que aplicar. |
+| `drug-classifier.router.ts` | `DrugClassifier` | Global (tabla puente sin `organizationId`) | (b) | `drug_classifier_select` es la única policy (SELECT, `qual=true`); sin policy de INSERT/DELETE — `add`/`remove` requieren rol BYPASSRLS. Gap de IDOR distinto (no valida `drugId` contra tenant) anotado en `decisions_needed`, fuera de este alcance. |
+| `epcis-query.router.ts` | `ece.epcis_event_equipment` | **Tenant-scoped** (vía `BiomedicalEquipment.organizationId`) | **(a) migrado** | Policies `epcis_event_equipment_select/_insert` ya exigen `organizationId = current_org_id() OR is_break_glass()`. Antes del fix, las 4 queries usaban `$queryRawUnsafe` directo sin filtro de organización — cross-tenant leak real. Ninguna policy nueva necesaria. |
+| `exchange-rate.router.ts` | `ExchangeRate` | Global | (b) | Única policy `fx_select_all` (SELECT, `qual=true`); sin policy de INSERT para `authenticated` — `create` requiere rol BYPASSRLS. |
+| `locale.router.ts` | `Country`, `GeoDivision`, `Holiday` | Global | (b) | Policies `*_select_all` abiertas. `currentLocale` lee `Organization` por `ctx.tenant.organizationId` (server-derivado, no input de usuario) — sin vector cross-tenant. |
+| `mfa.router.ts` | `User`, `UserCredential` (propios) | Self-scoped (no tenant) | (b), migración diferida | Policies `user_self_modify`/`user_cred_self` calzarían con el filtro JS existente (`ctx.user.id` en todo lado), pero `enroll`/`verify` usan `$transaction([...])` en forma ARRAY (no callback) y no existe un helper "solo usuario, sin org" en `rls-context.ts`. Migrar exige un PR aislado (nuevo helper + tests) — no se fuerza aquí para no reescribir ~18 tests existentes sin ganancia de seguridad real. |
+| `portal.router.ts` → `account.enableMfa` | `PortalAccount` | Self-scoped (portal) | **(a) migrado** | `portal_account_select`/`_update` (`id = current_portal_account()`). La RPC a Vault (`set_portal_mfa_secret_vault`) queda fuera del contexto: `authenticated` NO tiene `EXECUTE` sobre ella (verificado en prod). |
+| `portal.router.ts` → `account.verifyMfa` | `PortalAccount` | Self-scoped (portal) | **(a) migrado** | Igual que `enableMfa`; la RPC `get_portal_mfa_secret` también queda fuera (sin `EXECUTE` para `authenticated`). |
+| `portal.router.ts` → `auth.logout` | `PortalSession` | Self-scoped (portal) | **(a) migrado** | `portal_session_update` (`accountId = current_portal_account()`) cubre exactamente el `updateMany` existente. |
+| `portal.router.ts` → `account.register`/`verifyEmail`, `auth.requestLogin`/`verifyLogin` | `PortalAccount`, `PortalMagicLink` | Self-scoped (portal), pre-sesión | (b) | `PortalAccount` no tiene policy de INSERT y `PortalMagicLink` no tiene policy de UPDATE para `authenticated` (verificado en prod) — el alta de cuenta y el consumo del magic link (`consumedAt`) son estructuralmente pre-sesión (no existe `current_portal_account()` todavía). Defensa real: anti-enumeration + rate limit. |
+| `portal.router.ts` → `guardian.list` | `GuardianRelationship`, `Patient` (join `wardPatient`) | Tenant-scoped (`Patient`) + self-scoped (`GuardianRelationship`) | (b), **pendiente** | `GuardianRelationship` sí tiene policy portal-aware, pero `Patient` solo tiene `organizationId = current_org_id()` — GUC que `withPortalContext` no setea. Migrar tal cual dejaría `ward` siempre `null`. Policy nueva propuesta (NO aplicada) en SQL 268. Mismo gap ya late en `expedienteRouter.getMiExpediente`/`hce.labResults.get` (ya usan `withPortalContext` hoy) — documentado, no corregido en este PR. |
+| `user-service-unit.router.ts` | `UserServiceUnitAssignment` | Tenant-scoped, vía `ServiceUnit.organizationId` en JS | (b) — **decisión previa, sin cambios** | Ya trae su propia justificación de cabecera (R02 anterior, 2026-08-22): la única policy es de SELECT propia (`userId = current_user_id()`), incompatible con `listByUser`/`listByService` (consultan asignaciones de OTROS usuarios) y sin policy de escritura. Se referencia aquí solo para dejar registro en la tabla maestra. |
+| `workflow-estado.router.ts` | `ece.flujo_estado`, `ece.flujo_transicion`, `ece.documento_rol` | Global (catálogo motor ECE, sin `organizationId`) | (b) | Única policy es `catalogo_read_all` (SELECT); sin policy de escritura — demotar rompe todo `create`/`update`/`delete`. Control real: `requireRole(["DIR","WORKFLOW_DESIGNER"])`. |
+| `workflow-plantilla.router.ts` | `ece.workflow_plantilla`, `ece.flujo_estado`, `ece.flujo_transicion` | Global | (b) | Mismo patrón: `catalogo_read_all` sin escritura; `applyToWorkflow` requiere BYPASSRLS. |
+| `workflow-rol.router.ts` | `ece.documento_rol`, `ece.rol` | Global | (b) | Mismo patrón `catalogo_read_all` sin escritura. |
+| `workflow-simulacion.router.ts` | `ece.flujo_estado`, `ece.flujo_transicion` | Global | (b) | 100% lectura, sin mutación; `catalogo_read_all` ya abierta. |
+| `workflow-transicion.router.ts` | `ece.flujo_transicion`, `ece.flujo_estado`, `ece.documento_rol`, `ece.rol` | Global | (b) | Mismo patrón `catalogo_read_all` sin escritura. |
+| `workflow-validator-visual.router.ts` | `ece.rol` | Global | (b) | 100% lectura (`tenantProcedure`, valida un grafo pasado por input). |
+| `workflow-validator.router.ts` | `ece.flujo_estado`, `ece.flujo_transicion`, `ece.documento_rol` | Global | (b) | 100% lectura. |
+| `ece/critical-result.router.ts` | `ece.critical_result_notification` | **Tenant-scoped** (`crn_tenant_isolation`) | **Ya cumple** | Las 4 procedures ya llaman `applyTenantContext` (primitiva de bajo nivel, no el azúcar `withTenantContext`) — apareció en el listado inicial por un grep literal que no capturaba esa variante. Sin cambios en este PR. |
+
+**Pendiente de aprobación (no aplicado a prod):** `packages/database/sql/268_r02_policies_routers_residuales.sql` —
+policy nueva de SELECT en `Patient` para lecturas del portal (propio paciente
++ ward bajo tutela activa), necesaria para migrar `guardian.list` sin romper
+el JOIN a `wardPatient`.

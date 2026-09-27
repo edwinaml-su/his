@@ -9,6 +9,17 @@
  *
  * Roles: DIR o WORKFLOW_DESIGNER.
  * applyToWorkflow es mutación; list/get son queries (lectura).
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext/withEceContext. `ece.workflow_plantilla` es la biblioteca
+ * GLOBAL de plantillas reutilizables (sin organizationId), y `applyToWorkflow`
+ * escribe en `ece.flujo_estado`/`ece.flujo_transicion` (mismo catalogo global
+ * que workflow-estado.router.ts). Verificado en prod (read-only): la unica
+ * policy de `ece.workflow_plantilla` es `catalogo_read_all` (SELECT,
+ * qual=true) - sin policy de escritura para `authenticated`. Demotar el rol
+ * rompería `applyToWorkflow` (INSERT masivo en flujo_estado/flujo_transicion,
+ * mismo gap ya documentado en workflow-estado.router.ts). Control de acceso
+ * real: `requireRole(["DIR","WORKFLOW_DESIGNER"])`.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

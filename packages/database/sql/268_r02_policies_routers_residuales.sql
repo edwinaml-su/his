@@ -1,0 +1,116 @@
+-- =============================================================================
+-- 268_r02_policies_routers_residuales.sql
+-- R02 (auditoria RLS externa) — cierre de residuales: 18 routers sin
+-- withTenantContext/withPortalContext/withEceContext (ver
+-- docs/12_rls_validation.md §"Routers sin contexto RLS — decisiones
+-- 2026-09-27"). La mayoria se resolvio como decision (b) (justificacion en
+-- comentario de cabecera del router, sin tocar BD) o (a) migrando en TS
+-- contra policies YA existentes (epcis-query, portal.account.enableMfa/
+-- verifyMfa, portal.auth.logout). Este archivo cubre el UNICO caso donde la
+-- migracion (a) requiere una policy nueva que hoy no existe.
+--
+-- ⚠️ PROPUESTO — NO APLICADO a prod. Requiere aprobacion de Edwin (impacto:
+--    nueva policy de SELECT sobre "Patient", tabla PHI de mayor sensibilidad
+--    del sistema). NO se aplico via mcp__Supabase__apply_migration en esta
+--    tarea (alcance: solo lectura contra prod).
+--
+-- =============================================================================
+-- CONTEXTO
+-- =============================================================================
+--
+-- `packages/trpc/src/routers/portal.router.ts` → `guardian.list` hace:
+--
+--   ctx.prisma.guardianRelationship.findMany({
+--     where: { guardianAccountId: ctx.portalAccount.id, status: "ACTIVE" },
+--     include: { wardPatient: { select: { id, firstName, lastName, birthDate } } },
+--   })
+--
+-- Verificado en prod (read-only, 2026-09-27):
+--   - "GuardianRelationship" SI tiene una policy de SELECT que cubre este uso:
+--       guardian_relationship_select: USING (
+--         "guardianAccountId" = current_portal_account()
+--         AND status = ANY (ARRAY['ACTIVE','EXPIRED'])
+--       )
+--   - "Patient" NO tiene ninguna policy que reconozca `current_portal_account()`.
+--     Sus 2 policies de SELECT son:
+--       tenant_isolation_select: USING (organizationId = current_org_id() OR is_break_glass())
+--       patient_soft_delete:     USING (deletedAt IS NULL OR is_break_glass())
+--     `withPortalContext` (packages/trpc/src/rls-context.ts) solo setea
+--     `app.current_portal_account` — NUNCA `app.current_org_id`. Si
+--     `guardian.list` se migrara a withPortalContext tal cual, el JOIN
+--     implicito de Prisma a "Patient" (para resolver `wardPatient`) quedaria
+--     sujeto a `organizationId = current_org_id()` con el GUC en NULL →
+--     0 filas visibles → `ward` llegaria siempre `undefined`/null al front,
+--     rompiendo la feature en silencio (mismo patron de incidente que ya
+--     describe CLAUDE.md para nonce-CSP/nginx-gateway: "verde" superficial,
+--     roto en runtime).
+--
+-- MISMO GAP LATENTE, YA EN PRODUCCION (fuera del scope de este PR, solo se
+-- documenta): `portal.router.ts` → `expedienteRouter.getMiExpediente` y
+-- `hceRouter.labResults.get` YA usan `withPortalContext` hoy y TAMBIEN leen
+-- "Patient" dentro de ese contexto (`tx.patient.findFirst`/`findUnique`) para
+-- datos propios del paciente autenticado (no de un ward). Sufren el MISMO
+-- problema: bajo RLS real (rol `authenticated` demotado), esas queries
+-- devuelven 0 filas salvo que exista una policy de "Patient" que reconozca
+-- `current_portal_account()`. La policy propuesta abajo (bloque A) cubre
+-- AMBOS casos (paciente propio + ward bajo tutela activa) para no dejar el
+-- gap a medias.
+--
+-- =============================================================================
+-- BLOQUE A (PROPUESTO) — policy nueva de SELECT en "Patient" para el portal
+-- =============================================================================
+--
+-- Es ADITIVA: las policies RLS de Postgres se combinan con OR dentro del
+-- mismo comando (aqui, SELECT). Una sesion de staff (sin
+-- `app.current_portal_account` seteado) sigue evaluando exactamente igual
+-- que hoy via `tenant_isolation_select`/`patient_soft_delete` — esta policy
+-- nueva evalua a `false` para ella (current_portal_account() es NULL) y no
+-- cambia su comportamiento en absoluto.
+
+-- CREATE POLICY patient_portal_self_or_guardian_select ON "Patient"
+--   FOR SELECT
+--   TO authenticated
+--   USING (
+--     current_portal_account() IS NOT NULL
+--     AND (
+--       -- El propio paciente autenticado en el portal.
+--       id IN (
+--         SELECT "patientId" FROM "PortalAccount"
+--         WHERE id = current_portal_account()
+--       )
+--       OR
+--       -- Un ward bajo tutela ACTIVA del guardian autenticado.
+--       id IN (
+--         SELECT "wardPatientId" FROM "GuardianRelationship"
+--         WHERE "guardianAccountId" = current_portal_account()
+--           AND status = 'ACTIVE'
+--       )
+--     )
+--   );
+
+-- =============================================================================
+-- BLOQUE B (VERIFICACION, correr ANTES y DESPUES de aplicar el bloque A)
+-- =============================================================================
+
+-- Antes: confirma que la policy nueva aun no existe.
+-- SELECT policyname FROM pg_policies
+--  WHERE schemaname = 'public' AND tablename = 'Patient'
+--    AND policyname = 'patient_portal_self_or_guardian_select';
+
+-- Despues: confirma que "Patient" sigue con RLS habilitado y ahora 3 policies de SELECT.
+-- SELECT policyname, cmd, qual FROM pg_policies
+--  WHERE schemaname = 'public' AND tablename = 'Patient'
+--  ORDER BY cmd, policyname;
+
+-- =============================================================================
+-- SIGUIENTE PASO (fuera de este archivo, requiere aprobacion + otro PR)
+-- =============================================================================
+-- Una vez aplicado el bloque A:
+--   1. Migrar `guardian.list` en portal.router.ts a `withPortalContext`.
+--   2. Anadir test que confirme `wardPatient` NO llega null bajo el mock de
+--      contexto (patron `installTenantContextMock`/equivalente portal).
+--   3. Re-verificar `expedienteRouter.getMiExpediente` y
+--      `hceRouter.labResults.get` contra un entorno con RLS realmente
+--      forzado (`relforcerowsecurity` o una conexion sin BYPASSRLS) — hoy
+--      nadie lo ha probado end-to-end con el rol `authenticated` real.
+-- =============================================================================

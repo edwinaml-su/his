@@ -14,6 +14,16 @@
  * todavía no incluye `locale.ts` y la `rootDir` de este paquete impide
  * imports cross-package por ruta relativa. El día que el barrel se amplíe,
  * basta sustituir las constantes locales por imports desde `@his/contracts`.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. "Country"/"GeoDivision"/"Holiday" son catalogos
+ * GLOBALES (departamentos/municipios/feriados de SV/GT, sin scoping por
+ * organizacion). Verificado en prod (read-only): sus policies de SELECT son
+ * todas qual=true para el rol `public` - no hay aislamiento que aplicar.
+ * `currentLocale` lee `Organization` por `ctx.tenant.organizationId`, un
+ * valor que viene del contexto de sesion server-side (cookie `his.org` +
+ * Supabase auth), nunca del input del cliente - no hay vector de lectura
+ * cross-tenant aunque el acceso sea directo via ctx.prisma.
  */
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc";

@@ -139,12 +139,22 @@ describe("portal.auth.verifyLogin", () => {
 
 describe("portal.auth.logout", () => {
   let prisma;
-  beforeEach(() => { prisma = mockDeep(); });
+  beforeEach(() => {
+    prisma = mockDeep();
+    // R02 — logout ahora corre bajo withPortalContext.
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
+  });
 
   it("revoca sesiones activas", async () => {
     prisma.portalSession.updateMany.mockResolvedValue({ count: 1 });
     expect(await portalRouter.createCaller(pc(prisma)).auth.logout()).toEqual({ ok: true });
     expect(prisma.portalSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ accountId: PA }) }));
+  });
+
+  it("R02: corre dentro de withPortalContext (SET LOCAL + demote)", async () => {
+    prisma.portalSession.updateMany.mockResolvedValue({ count: 0 });
+    await portalRouter.createCaller(pc(prisma)).auth.logout();
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
   it("UNAUTHORIZED sin portalAccount", async () => {
@@ -159,6 +169,9 @@ describe("portal.account.enableMfa", () => {
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
     // Vault write mock (retorna bigint, valor ignorado por el router).
     prisma.$executeRaw.mockResolvedValue(1n);
+    // R02 — el find/update de portalAccount ahora corren bajo withPortalContext
+    // (la RPC de Vault de arriba queda fuera del contexto, sin transacción).
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
   });
 
   it("genera QR server-side y secretForManualEntry (K-07)", async () => {
@@ -183,6 +196,14 @@ describe("portal.account.enableMfa", () => {
     prisma.portalAccount.findUnique.mockResolvedValue(null);
     await expect(portalRouter.createCaller(pc(prisma)).account.enableMfa({})).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("R02: el find+update de portalAccount corren dentro de withPortalContext", async () => {
+    prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
+    prisma.portalAccount.update.mockResolvedValue({});
+    await portalRouter.createCaller(pc(prisma)).account.enableMfa({});
+    // 2 transacciones separadas (find y update), la RPC de Vault queda fuera.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("portal.account.verifyMfa", () => {
@@ -192,6 +213,8 @@ describe("portal.account.verifyMfa", () => {
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
     // Vault retorna null → activa fallback app-layer para tests legados.
     prisma.$queryRaw.mockResolvedValue([{ get_portal_mfa_secret: null }]);
+    // R02 — el fallback findUnique + el update final corren bajo withPortalContext.
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
   });
 
   it("PRECONDITION_FAILED sin mfaSecret", async () => {
@@ -217,6 +240,8 @@ describe("portal.account.verifyMfa", () => {
     prisma.portalAccount.update.mockResolvedValue({});
     expect(await portalRouter.createCaller(pc(prisma)).account.verifyMfa({ code })).toEqual({ enabled: true });
     expect(prisma.portalAccount.update).toHaveBeenCalledWith(expect.objectContaining({ data: { mfaEnabled: true } }));
+    // R02 — fallback findUnique + update final corren dentro de withPortalContext.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
   it("UNAUTHORIZED con codigo incorrecto", async () => {

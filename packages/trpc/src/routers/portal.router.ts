@@ -13,6 +13,42 @@
  * K-19 (audit Stream K): `validateDUI` se importa desde `@his/contracts/validators`
  * (alias resuelto en vitest.config.ts línea 45). El inline previo causaba
  * drift silencioso con la implementación canónica.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decisiones por procedure (este
+ * router mezcla bootstrap pre-sesion con operacion ya autenticada; NO es un
+ * bloque homogeneo):
+ *
+ *  - account.enableMfa / account.verifyMfa: decision (a), MIGRADOS a
+ *    withPortalContext para los reads/writes de PortalAccount (policies
+ *    portal_account_select/_update ya exigen id = current_portal_account()).
+ *    La llamada RPC a Vault (set_portal_mfa_secret_vault/get_portal_mfa_secret)
+ *    se deja FUERA del contexto demotado a proposito: verificado en prod que
+ *    `authenticated` NO tiene EXECUTE sobre esas 2 funciones SECURITY DEFINER
+ *    (has_function_privilege = false) - demotar ahi rompe el enrolamiento/
+ *    verificacion de MFA por completo (mismo patron de riesgo documentado en
+ *    ece/critical-result.router.ts con `demoteRole:false` por falta de grant).
+ *  - auth.logout: decision (a), MIGRADO a withPortalContext (PortalSession
+ *    tiene policy portal_session_update con accountId = current_portal_account()).
+ *  - account.register, account.verifyEmail, auth.requestLogin, auth.verifyLogin:
+ *    decision (b), NO migrados. Verificado en prod (read-only): PortalAccount
+ *    NO tiene policy de INSERT para `authenticated` (solo SELECT/UPDATE) y
+ *    PortalMagicLink NO tiene policy de UPDATE (solo INSERT/SELECT) - el
+ *    consumo del token (`consumedAt`) y la creacion de la cuenta/lookup por
+ *    email/DUI son estructuralmente pre-sesion (no existe `current_portal_
+ *    account()` todavia) y requieren el rol BYPASSRLS. La defensa real de
+ *    estos endpoints es anti-enumeration + rate limit, no RLS.
+ *  - guardian.list: decision (b) PENDIENTE de policy nueva, NO migrado. La
+ *    policy `guardian_relationship_select` si cubre GuardianRelationship, pero
+ *    el include de `wardPatient` hace un JOIN a "Patient", cuya unica policy
+ *    de SELECT exige `organizationId = current_org_id()` - GUC que
+ *    withPortalContext NO setea. Migrar tal cual dejaria `ward` siempre en
+ *    null bajo RLS real. Propuesta de policy nueva (NO aplicada) en
+ *    `packages/database/sql/268_r02_policies_routers_residuales.sql`.
+ *
+ * Ver docs/12_rls_validation.md §"Routers sin contexto RLS — decisiones
+ * 2026-09-27" para el detalle completo (incluye el mismo hallazgo de Patient
+ * ya latente en `hce.labResults.get`/`expedienteRouter.getMiExpediente`, que
+ * SI usan withPortalContext hoy).
  */
 import { z } from "zod";
 import {
@@ -275,10 +311,14 @@ const accountRouter = router({
   enableMfa: portalProcedure
     .input(z.object({}).optional())
     .mutation(async ({ ctx }) => {
-      const account = await ctx.prisma.portalAccount.findUnique({
-        where: { id: ctx.portalAccount.id },
-        select: { id: true, email: true, mfaEnabled: true },
-      });
+      // R02 — read del propio account bajo RLS real (portal_account_select:
+      // id = current_portal_account()).
+      const account = await withPortalContext(ctx.prisma, ctx.portalAccount.id, (tx) =>
+        tx.portalAccount.findUnique({
+          where: { id: ctx.portalAccount.id },
+          select: { id: true, email: true, mfaEnabled: true },
+        }),
+      );
 
       if (!account) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no encontrada." });
@@ -287,15 +327,21 @@ const accountRouter = router({
       const secretRaw = base32Encode(randomBytes(TOTP_SECRET_BYTES));
       const accountId = ctx.portalAccount.id;
 
-      // Escribir a Vault (el helper limpia mfaSecret y popula mfaSecretVaultId).
+      // R02 — esta RPC se deja FUERA de withPortalContext a propósito:
+      // `authenticated` no tiene EXECUTE sobre set_portal_mfa_secret_vault
+      // (SECURITY DEFINER, verificado en prod) — demotar el rol antes de esta
+      // llamada rompería el enrolamiento completo con "permission denied".
       await ctx.prisma.$executeRaw`SELECT set_portal_mfa_secret_vault(${accountId}::uuid, ${secretRaw})`;
 
       // Marcar setup en progreso (mfaEnabled=false hasta verifyMfa exitoso).
       // No tocar mfaSecret — el helper SECDEF ya lo limpió.
-      await ctx.prisma.portalAccount.update({
-        where: { id: accountId },
-        data: { mfaEnabled: false },
-      });
+      // R02 — write bajo RLS real (portal_account_update: id = current_portal_account()).
+      await withPortalContext(ctx.prisma, accountId, (tx) =>
+        tx.portalAccount.update({
+          where: { id: accountId },
+          data: { mfaEnabled: false },
+        }),
+      );
 
       const otpauthUri = `otpauth://totp/Portal%20Avante:${encodeURIComponent(account.email)}?secret=${secretRaw}&issuer=HIS-Avante`;
 
@@ -313,6 +359,9 @@ const accountRouter = router({
     .mutation(async ({ ctx, input }) => {
       const accountId = ctx.portalAccount.id;
 
+      // R02 — al igual que en enableMfa, esta RPC se deja FUERA de
+      // withPortalContext: `authenticated` no tiene EXECUTE sobre
+      // get_portal_mfa_secret (SECURITY DEFINER, verificado en prod).
       // Vault-first: get_portal_mfa_secret() retorna el secret en claro si
       // mfaSecretVaultId está populado, o NULL si el account usa app-layer.
       const [vaultRow] = await ctx.prisma.$queryRaw<Array<{ get_portal_mfa_secret: string | null }>>`
@@ -322,10 +371,13 @@ const accountRouter = router({
 
       if (secretPlain === null) {
         // Fallback app-layer (accounts creados antes de Sprint 4 / BD-P0-6).
-        const account = await ctx.prisma.portalAccount.findUnique({
-          where: { id: accountId },
-          select: { mfaSecret: true },
-        });
+        // R02 — read bajo RLS real (portal_account_select).
+        const account = await withPortalContext(ctx.prisma, accountId, (tx) =>
+          tx.portalAccount.findUnique({
+            where: { id: accountId },
+            select: { mfaSecret: true },
+          }),
+        );
         if (!account?.mfaSecret) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "MFA no está configurado. Use enableMfa primero." });
         }
@@ -336,10 +388,13 @@ const accountRouter = router({
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Código TOTP inválido." });
       }
 
-      await ctx.prisma.portalAccount.update({
-        where: { id: accountId },
-        data: { mfaEnabled: true },
-      });
+      // R02 — write bajo RLS real (portal_account_update).
+      await withPortalContext(ctx.prisma, accountId, (tx) =>
+        tx.portalAccount.update({
+          where: { id: accountId },
+          data: { mfaEnabled: true },
+        }),
+      );
 
       return { enabled: true };
     }),
@@ -524,15 +579,18 @@ const authRouter = router({
     }),
 
   /** Revoca la sesión activa del portal account autenticado. */
+  // R02 — MIGRADO a withPortalContext (portal_session_update: accountId = current_portal_account()).
   logout: portalProcedure.mutation(async ({ ctx }) => {
-    await ctx.prisma.portalSession.updateMany({
-      where: {
-        accountId: ctx.portalAccount.id,
-        revokedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      data: { revokedAt: new Date() },
-    });
+    await withPortalContext(ctx.prisma, ctx.portalAccount.id, (tx) =>
+      tx.portalSession.updateMany({
+        where: {
+          accountId: ctx.portalAccount.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { revokedAt: new Date() },
+      }),
+    );
     return { ok: true };
   }),
 });

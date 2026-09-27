@@ -16,6 +16,18 @@
  *
  * Importa los schemas via ruta relativa porque `contracts/schemas/index.ts`
  * está congelado en este sprint.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. Verificado en prod (read-only): audit."AuditLog" tiene
+ * RLS con policy auditlog_tenant_select ("organizationId" = current_org_id()
+ * OR is_break_glass()) - es decir, DEMOTAR el rol aqui filtraria por tenant
+ * una tabla que este router existe precisamente para verificar COMPLETA
+ * (la cadena de hashes es global, no por organizacion: cada fila encadena
+ * con la anterior de la MISMA tabla sin importar el tenant). El propio
+ * `count(*) FROM audit."AuditLog"` de verifyChain quedaria mal (contaria
+ * solo las filas del tenant del caller, no el total real), y fn_verify_chain
+ * perderia sentido si solo ve un subconjunto. Acceso ya restringido a
+ * super_admin/admin_clinico via requireRole(INTEGRITY_ROLES).
  */
 import { z } from "zod";
 import {

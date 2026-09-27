@@ -14,6 +14,22 @@
  *
  * Spec: docs/backlog/fase2/_insumos/05_motor_workflow.sql
  *       docs/backlog/fase2/03_epic_workflow_engine.md
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext/withEceContext. `ece.flujo_estado`/`ece.flujo_transicion`/
+ * `ece.documento_rol`/`ece.tipo_documento` son el catalogo GLOBAL del motor
+ * de workflow ECE (data-driven, ver CLAUDE.md §Motor de workflow ECE) - NO
+ * tienen columna organizationId ni establecimiento_id, son compartidos por
+ * toda la instalacion. Verificado en prod (read-only): la unica policy sobre
+ * estas 4 tablas es `catalogo_read_all` (SELECT, qual=true) - NO existe
+ * policy de INSERT/UPDATE/DELETE para `authenticated`. Demotar el rol
+ * rompería TODAS las mutaciones de este router (create/update/delete de
+ * estados y transiciones, assign/revoke de roles funcionales). El control de
+ * acceso real es `requireRole(["DIR","WORKFLOW_DESIGNER"])`.
+ * (`ece.workflow_estado_layout` SI tiene policies de INSERT/UPDATE, pero con
+ * `with_check=true` sin restriccion - demotar ahi no aportaria aislamiento
+ * adicional, y separar solo setLayout/getLayout del resto del router no se
+ * justifica.)
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
