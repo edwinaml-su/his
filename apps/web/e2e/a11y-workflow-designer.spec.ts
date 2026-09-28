@@ -25,8 +25,12 @@ async function getFirstWorkflowHref(page: import("@playwright/test").Page): Prom
 // ─── Scenarios ────────────────────────────────────────────────────────────────
 
 test.describe("US.F2.2.17 — WCAG 2.1 AA — Workflow Designer", () => {
+  // workflowTipoDoc.list requiere rol DIR o WORKFLOW_DESIGNER (ver
+  // packages/trpc/src/routers/workflow-tipoDoc.router.ts) — "admin" (rol
+  // Administrador) da FORBIDDEN y tumba los 5 escenarios contra la página de
+  // error. "director" sí tiene el código DIR.
   test.beforeEach(async ({ page }) => {
-    await login(page, "admin");
+    await login(page, "director");
   });
 
   test("Escenario 1: listado de tipos de documento — sin violaciones críticas o serias", async ({ page }) => {

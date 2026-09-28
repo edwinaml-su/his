@@ -164,6 +164,23 @@ jobs:
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/206_audit_write_path.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/213_domain_event_dual_context.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
+          # 22: extiende fn_audit_row a Prescription/PrescriptionItem/
+          # MedicationDispense/MedicationAdministration/StockItem (y más,
+          # Wave 6-8) — sin esto /audit no muestra NINGUNA fila para el
+          # circuito de farmacia (hallazgo @QA, apps/web/e2e/dod/
+          # farmacia-circuito.spec.ts, 2026-09-28: 0 filas en audit."AuditLog"
+          # para una Prescription recién creada). Idempotente (DROP+CREATE
+          # por tabla).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/22_audit_triggers_phase2.sql
+          # 210/211 (CC-0026 Ola 2) — `ece.indicaciones_medicas.tipo_indicacion`/
+          # `fecha_firma` y `ece.indicacion_item.drug_id`/`detalle`: sin estas
+          # columnas, CUALQUIER create()/firmar() de /ece/indicaciones/nueva
+          # revienta con 42703 (column does not exist) — el CPOE completo
+          # (y con él, ADR 0023 "punto único de prescripción") queda inerte
+          # en la BD efímera. Mismo hallazgo que 22 arriba. Idempotente
+          # (ADD COLUMN IF NOT EXISTS + guardas propias).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/210_cc0026_indicacion_tipo.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/211_cc0026_indicacion_item_estructura.sql
           # docs/48 C5-2 — "ServicePriceList"/"ServicePriceListItem"/
           # "ServiceCategory"/"ServicePriceRule" son tablas fuera de
           # schema.prisma por diseño (drift documentado en CLAUDE.md): `db
@@ -178,8 +195,19 @@ jobs:
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/133_service_price_list_tarifario.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/204_cc0021_motor_reglas_precios.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/228_lista_precio_default.sql
+          # "PerformanceSample"/"NpsResponse" — mismo patrón de drift que
+          # ServicePriceList (docs/48 C5-2): existen en prod (Wave 7) pero no
+          # en schema.prisma, así que `db push` nunca las crea. Sin esto,
+          # POST /api/perf/sample (beacon de performance del cliente, dispara
+          # en CADA page load) revienta con "relation \"PerformanceSample\"
+          # does not exist" — capturado en la corrida local del baseline E2E
+          # 2026-09-27 (@QA). El error queda contenido (la ruta atrapa
+          # cualquier excepción y responde 200 igual, ver
+          # apps/web/src/app/api/perf/sample/route.ts), así que no tumbaba
+          # specs, pero ensuciaba el log del webServer en TODOS los runs.
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/130_performance_sample_and_nps.sql
           # Re-aplicar el bootstrap: su `GRANT ALL PRIVILEGES ON ALL TABLES IN
-          # SCHEMA public...` corrió ANTES de que 133/204 crearan estas 4
+          # SCHEMA public...` corrió ANTES de que 133/204/130 crearan estas
           # tablas nuevas — un GRANT ON ALL TABLES IN SCHEMA es de efecto
           # inmediato, no retroactivo. 133 tampoco trae su propio GRANT a
           # `authenticated` (204 sí, para ServiceCategory/ServicePriceRule) —
@@ -193,6 +221,15 @@ jobs:
       - name: Seed minimal data
         run: npm run db:seed
         continue-on-error: true
+
+      - name: Seed rol Director (E2E)
+        # packages/database/sql/64_director_role.sql usa el organizationId de
+        # PRODUCCIÓN hardcodeado — no existe en la BD efímera de este job (el
+        # seed genera ids nuevos en cada corrida). Sin este paso,
+        # seed-test-users.mjs no encuentra Role.name='Director' y
+        # qa.director@his.test queda sin rol, bloqueando toda spec que hace
+        # login(page, "director") (ver scripts/e2e-seed-director-role.sql).
+        run: npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-seed-director-role.sql
 
       - name: Seed usuarios de test E2E (GoTrue)
         # Crea qa.admin@his.test / qa.triagist@his.test / etc. en el GoTrue

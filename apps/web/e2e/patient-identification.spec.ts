@@ -41,7 +41,7 @@ test.describe("Identificación Paciente — /patient-id", () => {
 
   test("GSRN de formato incorrecto muestra error de validación en cliente", async ({ page }) => {
     await goToPatientId(page);
-    await page.getByRole("textbox").fill(INVALID_FORMAT_GSRN);
+    await page.getByRole("textbox", { name: /gsrn/i }).fill(INVALID_FORMAT_GSRN);
     await page.getByRole("button", { name: /identificar/i }).click();
     await expect(page.getByRole("alert")).toBeVisible();
   });
@@ -50,7 +50,7 @@ test.describe("Identificación Paciente — /patient-id", () => {
     page,
   }) => {
     await goToPatientId(page);
-    await page.getByRole("textbox").fill(BAD_CHECKDIGIT_GSRN);
+    await page.getByRole("textbox", { name: /gsrn/i }).fill(BAD_CHECKDIGIT_GSRN);
     await page.getByRole("button", { name: /identificar/i }).click();
     await expect(page.getByText(/dígito verificador/i)).toBeVisible();
   });
@@ -58,7 +58,7 @@ test.describe("Identificación Paciente — /patient-id", () => {
   // Requiere BD con paciente que tenga GSRN = VALID_GSRN activo
   test.skip("GSRN válido y registrado muestra ficha del paciente", async ({ page }) => {
     await goToPatientId(page);
-    await page.getByRole("textbox").fill(VALID_GSRN);
+    await page.getByRole("textbox", { name: /gsrn/i }).fill(VALID_GSRN);
     await page.getByRole("button", { name: /identificar/i }).click();
     // La ficha debe aparecer con badge "IDENTIFICADO"
     await expect(page.getByText("IDENTIFICADO")).toBeVisible();
@@ -69,7 +69,7 @@ test.describe("Identificación Paciente — /patient-id", () => {
   // Requiere BD con GSRN registrado como REVOKED
   test.skip("GSRN de pulsera revocada muestra hard-stop PULSERA_INACTIVA", async ({ page }) => {
     await goToPatientId(page);
-    await page.getByRole("textbox").fill(VALID_GSRN);
+    await page.getByRole("textbox", { name: /gsrn/i }).fill(VALID_GSRN);
     await page.getByRole("button", { name: /identificar/i }).click();
     await expect(page.getByText(/revocada/i)).toBeVisible();
   });

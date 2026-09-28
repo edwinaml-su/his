@@ -58,11 +58,16 @@ test.describe("US.F2.2.15 — Vista de solo lectura para roles no editores", () 
     await expect(page.locator("body")).not.toContainText("Application error");
   });
 
-  test("Admin ve botón editar (sin banner solo lectura)", async ({ page }) => {
-    await login(page, "admin");
+  test("Director ve botón editar (sin banner solo lectura)", async ({ page }) => {
+    // NO "admin": workflowTipoDoc.list (workflow-tipoDoc.router.ts:225) exige
+    // requireRole(["DIR", "WORKFLOW_DESIGNER"]) — el rol ADMIN da FORBIDDEN
+    // (mismo diagnóstico que a11y-workflow-designer.spec.ts), lo que hacía
+    // que getFirstWorkflowHref() devolviera null SIEMPRE y el test pasara
+    // trivialmente sin ejercitar nada — hallazgo @QA (2026-09-28).
+    await login(page, "director");
     const href = await getFirstWorkflowHref(page);
     if (!href) {
-      test.skip(true, "Sin workflows sembrados en BD de test");
+      test.skip(true, "Sin workflows sembrados en BD de test para el rol DIR");
       return;
     }
 
@@ -85,17 +90,27 @@ test.describe("US.F2.2.15 — Vista de solo lectura para roles no editores", () 
 
 test.describe("US.F2.2.16 — Vista mobile-friendly (viewport < 768px)", () => {
   test("viewport 360px renderiza MobileView con lista de estados", async ({ browser }) => {
-    // Crear contexto con viewport móvil
-    const context = await browser.newContext({
-      viewport: { width: 360, height: 640 },
-    });
+    // Contexto en tamaño desktop para el login: KioskAutoRedirect
+    // (components/kiosk-auto-redirect.tsx) se monta en /dashboard y
+    // redirige a /orientacion?montaje=kiosko en cualquier viewport
+    // <=1024px — login() nunca ve la URL /dashboard que espera y
+    // `waitForURL` revienta por timeout. Achicamos el viewport DESPUÉS
+    // del login, ya lejos de /dashboard, para probar el layout mobile de
+    // workflow-designer sin disparar el guard de kiosko.
+    const context = await browser.newContext();
     const page = await context.newPage();
 
-    await login(page, "admin");
+    // "director", NO "admin": workflowTipoDoc.list exige DIR/WORKFLOW_DESIGNER
+    // (ver comentario en "Director ve botón editar" arriba) — con "admin"
+    // getFirstWorkflowHref() siempre devolvía null y el timeout de FORBIDDEN
+    // terminaba maquillado como skip "sin workflows sembrados", un motivo
+    // falso — hallazgo @QA (2026-09-28).
+    await login(page, "director");
+    await page.setViewportSize({ width: 360, height: 640 });
     const href = await getFirstWorkflowHref(page);
     if (!href) {
       await context.close();
-      test.skip(true, "Sin workflows sembrados en BD de test");
+      test.skip(true, "Sin workflows sembrados en BD de test para el rol DIR");
       return;
     }
 
@@ -125,16 +140,18 @@ test.describe("US.F2.2.16 — Vista mobile-friendly (viewport < 768px)", () => {
   });
 
   test("viewport 375px — ReactFlow canvas ausente en mobile", async ({ browser }) => {
-    const context = await browser.newContext({
-      viewport: { width: 375, height: 812 },
-    });
+    // Mismo motivo que el test anterior: viewport móvil se aplica DESPUÉS
+    // del login para no disparar KioskAutoRedirect en /dashboard. "director",
+    // NO "admin" — ver comentario en "Director ve botón editar" arriba.
+    const context = await browser.newContext();
     const page = await context.newPage();
 
-    await login(page, "admin");
+    await login(page, "director");
+    await page.setViewportSize({ width: 375, height: 812 });
     const href = await getFirstWorkflowHref(page);
     if (!href) {
       await context.close();
-      test.skip(true, "Sin workflows sembrados en BD de test");
+      test.skip(true, "Sin workflows sembrados en BD de test para el rol DIR");
       return;
     }
 
