@@ -229,6 +229,41 @@ try {
       [IDS.ecePersonalNurse, IDS.eceInstitucion, IDS.eceEstab, qaNurse.id],
     );
   }
+  // indicaciones-medicas.router.ts `eceIds()` NO resuelve personal_salud por
+  // his_user_id (esa es la convención de identity-resolver.ts, usada por
+  // OTROS routers) — devuelve `ctx.user.id` DIRECTO como `personalId`, que
+  // luego se INSERTa en `indicaciones_medicas.medico_prescriptor`, columna
+  // con FK a `ece.personal_salud(id)`. Sin una fila cuyo `id` (no
+  // `his_user_id`) sea igual al `User.id` del médico/enfermera, create()
+  // revienta con 23503 (FK violation) — hallazgo @QA (2026-09-28,
+  // farmacia-circuito.spec.ts). SQL 257 (r1_sync_personal_salud, no aplicado
+  // en el bootstrap E2E) automatiza justo esto para usuarios reales vía
+  // trigger + backfill; acá se siembra el resultado equivalente a mano, con
+  // ids DISTINTOS de IDS.ecePersonal/ecePersonalNurse (namespace
+  // his_user_id) para no chocar con esas filas ni con nada que las
+  // referencie por índice determinista.
+  if (qaPhysician) {
+    await c.query(
+      `INSERT INTO ece.personal_salud
+         (id, institucion_id, establecimiento_id, documento_identidad,
+          nombre_completo, profesion, his_user_id)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'QA Physician',
+               'Medicina General', $1::uuid)
+       ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
+      [qaPhysician.id, IDS.eceInstitucion, IDS.eceEstab, `E2E-DOC-${qaPhysician.id.slice(0, 8)}`],
+    );
+  }
+  if (qaNurse) {
+    await c.query(
+      `INSERT INTO ece.personal_salud
+         (id, institucion_id, establecimiento_id, documento_identidad,
+          nombre_completo, profesion, his_user_id)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'QA Nurse',
+               'Enfermería', $1::uuid)
+       ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
+      [qaNurse.id, IDS.eceInstitucion, IDS.eceEstab, `E2E-ENF-${qaNurse.id.slice(0, 8)}`],
+    );
+  }
   await c.query(
     `INSERT INTO ece.episodio_atencion
        (id, paciente_id, establecimiento_id, modalidad, servicio_categoria,
@@ -647,6 +682,245 @@ try {
   console.log(`check RN-HIS-BOT-001: listas=${chkBot.listas} tipos=${chkBot.tipos} lotes=${chkBot.lotes} cuentas=${chkBot.cuentas}`);
   if (chkBot.listas < 4 || chkBot.tipos < 3 || chkBot.lotes < 7 || chkBot.cuentas < 7) {
     throw new Error('Verificación de fixtures RN-HIS-BOT-001 falló — revisar salida anterior');
+  }
+
+  // ─── 8. DoD (docs/46_gobierno_de_producto.md §5) — circuito de farmacia ──
+  // Fixtures EXCLUSIVOS de apps/web/e2e/dod/farmacia-circuito.spec.ts —
+  // namespace propio `e2ef3000` (no colisiona con e2ef1000 §1-6 ni e2ef2000
+  // §7). A diferencia de §6 arriba (que siembra la conciliación farmacia
+  // DIRECTO por SQL, atajo necesario para bedside-hard-stops.spec.ts), este
+  // bloque NO siembra `ece.indicacion_farmacia_pendiente` ni
+  // public."Prescription" — el spec los genera de verdad por UI
+  // (/ece/indicaciones/nueva → firmar) para ejercitar el consumer real
+  // (materializePrescripcionFromIndicacion, ADR 0023). Solo se siembra lo
+  // que NINGÚN flujo de producto puede crear (paciente/episodio/cama/pulsera
+  // GSRN/catálogo de fármacos e inventario) — exactamente el criterio del
+  // punto 3 del REQ ("si el seed no tiene los datos necesarios, agrégalos").
+  const IDS_DOD = {
+    patient:        'e2ef3000-0000-4000-8000-000000000001',
+    encounter:      'e2ef3000-0000-4000-8000-000000000002',
+    bed:            'e2ef3000-0000-4000-8000-000000000003',
+    bedAssignment:  'e2ef3000-0000-4000-8000-000000000004',
+    episodio:       'e2ef3000-0000-4000-8000-000000000005',
+    asignacionCama: 'e2ef3000-0000-4000-8000-000000000006',
+    drugA:      'e2ef3000-0000-4000-8000-00000000a001',
+    stockItemA: 'e2ef3000-0000-4000-8000-00000000a002',
+    stockLotA:  'e2ef3000-0000-4000-8000-00000000a003',
+    drugB:      'e2ef3000-0000-4000-8000-00000000b001',
+    stockItemB: 'e2ef3000-0000-4000-8000-00000000b002',
+    stockLotB:  'e2ef3000-0000-4000-8000-00000000b003',
+  };
+  // GS1 checksum mod10 verificado a mano contra los valores ya sembrados en
+  // §4 arriba (07501000001231 / 07501000009992 y 801874130000000011) antes
+  // de escribir estos — mismo algoritmo, mismo prefijo de empresa.
+  const GSRN_PACIENTE_DOD = '801874130000000035';
+  const GTIN_DRUG_A_DOD = '07501000105007'; // Cefotaxima DoD E2E — dispensada + escaneada en bedside
+  const GTIN_DRUG_B_DOD = '07501000106004'; // Vancomicina DoD E2E — lote con quantityOnHand=0 (hard stop)
+  const IDS_DOD_ACCOUNT = 'e2ef3000-0000-4000-8000-000000000007';
+
+  await c.query(
+    `INSERT INTO public."Bed"
+       (id, "organizationId", "establishmentId", "serviceUnitId", code, status,
+        active, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, 'OCCUPIED'::"BedStatus",
+             true, now(), now())
+     ON CONFLICT ("establishmentId", code)
+       DO UPDATE SET status = EXCLUDED.status, "updatedAt" = now()`,
+    [IDS_DOD.bed, orgId, estab.id, unitHosp.id, 'E2E-07'],
+  );
+
+  const MRN_DOD = 'E2E-DOD-FARMACIA-01';
+  const { rows: [patientDod] } = await c.query(
+    `INSERT INTO public."Patient"
+       (id, "organizationId", mrn, "firstName", "lastName", "biologicalSexId",
+        "isUnknown", gsrn, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3, 'Ana', 'Circuito DoD', $4::uuid, false, $5, now(), now())
+     ON CONFLICT ("organizationId", mrn)
+       DO UPDATE SET gsrn = EXCLUDED.gsrn, "updatedAt" = now()
+     RETURNING id`,
+    [IDS_DOD.patient, orgId, MRN_DOD, sex.id, GSRN_PACIENTE_DOD],
+  );
+  const patientIdDod = patientDod.id;
+
+  const encNumberDod = `ENC-${new Date().getUTCFullYear()}-000301`;
+  await c.query(
+    `INSERT INTO public."Encounter"
+       (id, "countryId", "organizationId", "establishmentId", "serviceUnitId",
+        "patientId", "admissionType", "encounterNumber", "admittedAt",
+        "currencyId", "exchangeRateToFunc", "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
+             'EMERGENCY'::"AdmissionType", $7, now(), $8::uuid, 1.0, now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.encounter, country.id, orgId, estab.id, unitHosp.id, patientIdDod, encNumberDod, currency.id],
+  );
+  await c.query(
+    `INSERT INTO public."BedAssignment"
+       (id, "encounterId", "bedId", "assignedAt", reason, "createdAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, now(), 'Fixture DoD farmacia', now())
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.bedAssignment, IDS_DOD.encounter, IDS_DOD.bed],
+  );
+
+  await c.query(
+    `INSERT INTO ece.cama (id, servicio_id, codigo, estado)
+     VALUES ($1::uuid, $2::uuid, $3, 'ocupada')
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.bed, IDS.eceServicio, 'E2E-07'],
+  );
+  // public_patient_id (58_ece_03_paciente.sql) es el ACL explícito hacia el
+  // MPI — columna DISTINTA de `id` (que aquí coincide con
+  // public."Patient".id por convención del seed, pero el bridge de
+  // prescription-consumer.ts SOLO lee `public_patient_id`, nunca `id`). Sin
+  // esto, `materializePrescripcionFromIndicacion` no resuelve patientId y
+  // deja el ítem en `itemsOmitidos` SILENCIOSAMENTE (sin error visible en la
+  // UI) — hallazgo encontrado escribiendo este spec, ver
+  // apps/web/e2e/dod/farmacia-circuito.spec.ts para el detalle. La fixture
+  // e2ef1000 (§3 arriba) tiene el mismo NULL — no lo toco (ese bloque nunca
+  // ejercita el consumer real, usa el atajo de conciliación directa de §6).
+  await c.query(
+    `INSERT INTO ece.paciente (id, establecimiento_id, numero_expediente, public_patient_id)
+     VALUES ($1::uuid, $2::uuid, 'E2E-DOD-001', $1::uuid)
+     ON CONFLICT (id) DO UPDATE SET public_patient_id = EXCLUDED.public_patient_id`,
+    [patientIdDod, IDS.eceEstab],
+  );
+  await c.query(
+    `INSERT INTO ece.episodio_atencion
+       (id, paciente_id, establecimiento_id, modalidad, servicio_categoria,
+        servicio_id, estado, public_encounter_id)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, 'hospitalario', 'hospitalizacion',
+             $4::uuid, 'abierto', $5::uuid)
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.episodio, patientIdDod, IDS.eceEstab, IDS.eceServicio, IDS_DOD.encounter],
+  );
+  await c.query(
+    `INSERT INTO ece.episodio_hospitalario
+       (episodio_id, circunstancia_ingreso, procedencia_ingreso,
+        modalidad_hospitalaria, fecha_hora_orden_ingreso, servicio_id, cama_id)
+     VALUES ($1::uuid, 'emergencia', 'emergencia', 'hospitalizacion', now(),
+             $2::uuid, $3::uuid)
+     ON CONFLICT (episodio_id) DO NOTHING`,
+    [IDS_DOD.episodio, IDS.eceServicio, IDS_DOD.bed],
+  );
+  await c.query(
+    `INSERT INTO ece.asignacion_cama (id, episodio_id, cama_id, desde, hasta)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, now(), NULL)
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.asignacionCama, IDS_DOD.episodio, IDS_DOD.bed],
+  );
+
+  await c.query(
+    `INSERT INTO ece.gs1_gsrn (gsrn, codigo, tipo, referencia_id, activo, descripcion)
+     VALUES ($1, $2, 'paciente', $3::uuid, true, 'Pulsera E2E DoD — Ana Circuito DoD')
+     ON CONFLICT (gsrn) DO UPDATE SET referencia_id = EXCLUDED.referencia_id, activo = true`,
+    [GSRN_PACIENTE_DOD, GSRN_PACIENTE_DOD, patientIdDod],
+  );
+
+  // docs/48 Ola 2 (C2-2) — capturarCargo (dispensation.router.ts reserveItem/
+  // scanItem) exige una cuenta ABIERTA/PENDIENTE_REGULARIZAR; sin esto la
+  // dispensación real bloquea con "El paciente no tiene una cuenta activa"
+  // (hallazgo encontrado escribiendo este spec — ninguna fixture E2E previa
+  // ejercitaba dispensation.reserveItem contra un paciente nuevo sin cuenta).
+  // tipoCuentaId=NULL resuelve contra la lista DEFAULT (BOT.defaultList,
+  // isDefault=true, sembrada en §7) — el GTIN de estos fármacos no tiene
+  // tarifa cargada ahí, así que el cargo queda PENDIENTE_TARIFA (no bloquea,
+  // ver comentario de `codigoCargoDispensacion` en dispensation.router.ts).
+  await c.query(
+    `INSERT INTO public."PatientAccount"
+       (id, "organizationId", "patientId", "numeroCuenta", "tipoCuentaId", status, "createdAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, 'CTA00001', NULL, 'ABIERTA'::"AccountStatus", now())
+     ON CONFLICT (id) DO UPDATE SET status = 'ABIERTA'::"AccountStatus"`,
+    [IDS_DOD_ACCOUNT, orgId, patientIdDod],
+  );
+
+  const gtinsDod = [
+    { codigo: GTIN_DRUG_A_DOD, descripcion: 'Cefotaxima 1g DoD E2E — Vial IV', principio: 'Cefotaxima', atc: 'J01DD01' },
+    { codigo: GTIN_DRUG_B_DOD, descripcion: 'Vancomicina 500mg DoD E2E — Vial IV', principio: 'Vancomicina', atc: 'J01XA01' },
+  ];
+  for (const g of gtinsDod) {
+    await c.query(
+      `INSERT INTO ece.gs1_gtin
+         (codigo, descripcion, fabricante, presentacion, contenido_unidades,
+          principio_activo, codigo_atc, principios_activos, excipientes_alergenos)
+       VALUES ($1, $2, 'Laboratorios QA Test SV', '1g', 1, $3, $4,
+               ARRAY[$3]::text[], '{}'::text[])
+       ON CONFLICT (codigo) DO NOTHING`,
+      [g.codigo, g.descripcion, g.principio, g.atc],
+    );
+  }
+
+  // Drug A — con stock real (5 unidades AVAILABLE): la receta que ADR 0023
+  // auto-genera al firmar la indicación se dispensa de verdad (reserveItem
+  // valida+descuenta inventario) y se administra en bedside.
+  await c.query(
+    `INSERT INTO public."Drug"
+       (id, "genericName", "brandName", "pharmaceuticalForm", "strengthValue",
+        "strengthUnit", "dispensingClass", active, "alertLevel", "createdAt", "updatedAt")
+     VALUES ($1::uuid, 'Cefotaxima DoD E2E', 'Cefotax QA', 'INJECTION'::"PharmaceuticalForm",
+             1000, 'mg', 'RX'::"DispensingClass", true, 'standard', now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.drugA],
+  );
+  await c.query(
+    `INSERT INTO public."StockItem"
+       (id, "organizationId", sku, name, "unitOfMeasure", category, "trackLots", gtin, active, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3, $4, 'UN', 'MEDICAMENTO', true, $5, true, now(), now())
+     ON CONFLICT ("organizationId", sku) DO UPDATE SET gtin = EXCLUDED.gtin`,
+    [IDS_DOD.stockItemA, orgId, 'DOD-E2E-CEFOTAXIMA', 'Cefotaxima DoD E2E', GTIN_DRUG_A_DOD],
+  );
+  await c.query(
+    `INSERT INTO public."StockLot"
+       (id, "organizationId", "establishmentId", "itemId", "lotNumber",
+        gtin_fisico, "expiryDate", quality_status, "quantityOnHand", active, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, (CURRENT_DATE + interval '1 year'),
+             'AVAILABLE', 5, true, now(), now())
+     ON CONFLICT ("organizationId", "establishmentId", "itemId", "lotNumber")
+       DO UPDATE SET "quantityOnHand" = 5, quality_status = 'AVAILABLE'`,
+    [IDS_DOD.stockLotA, orgId, estab.id, IDS_DOD.stockItemA, 'LOTE-DOD-CEFO-01', GTIN_DRUG_A_DOD],
+  );
+
+  // Drug B — lote sembrado con quantityOnHand=0 A PROPÓSITO: negativo real
+  // (no mockeado) del hard stop STOCK_INSUFICIENTE de dispensation.router.ts
+  // reserveItem. El spec prescribe+firma este fármaco en una 2ª indicación
+  // y falla al primer intento de "Validar y reservar" — nunca llega a
+  // administrarse, por diseño del escenario.
+  await c.query(
+    `INSERT INTO public."Drug"
+       (id, "genericName", "brandName", "pharmaceuticalForm", "strengthValue",
+        "strengthUnit", "dispensingClass", active, "alertLevel", "createdAt", "updatedAt")
+     VALUES ($1::uuid, 'Vancomicina DoD E2E', 'Vanco QA', 'INJECTION'::"PharmaceuticalForm",
+             500, 'mg', 'RX'::"DispensingClass", true, 'standard', now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS_DOD.drugB],
+  );
+  await c.query(
+    `INSERT INTO public."StockItem"
+       (id, "organizationId", sku, name, "unitOfMeasure", category, "trackLots", gtin, active, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3, $4, 'UN', 'MEDICAMENTO', true, $5, true, now(), now())
+     ON CONFLICT ("organizationId", sku) DO UPDATE SET gtin = EXCLUDED.gtin`,
+    [IDS_DOD.stockItemB, orgId, 'DOD-E2E-VANCOMICINA', 'Vancomicina DoD E2E', GTIN_DRUG_B_DOD],
+  );
+  await c.query(
+    `INSERT INTO public."StockLot"
+       (id, "organizationId", "establishmentId", "itemId", "lotNumber",
+        gtin_fisico, "expiryDate", quality_status, "quantityOnHand", active, "createdAt", "updatedAt")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, (CURRENT_DATE + interval '1 year'),
+             'AVAILABLE', 0, true, now(), now())
+     ON CONFLICT ("organizationId", "establishmentId", "itemId", "lotNumber")
+       DO UPDATE SET "quantityOnHand" = 0, quality_status = 'AVAILABLE'`,
+    [IDS_DOD.stockLotB, orgId, estab.id, IDS_DOD.stockItemB, 'LOTE-DOD-VANCO-00', GTIN_DRUG_B_DOD],
+  );
+
+  const { rows: [chkDod] } = await c.query(
+    `SELECT
+       (SELECT count(*)::int FROM ece.episodio_atencion WHERE id = $1::uuid AND estado='abierto') AS episodio,
+       (SELECT count(*)::int FROM ece.gs1_gsrn WHERE gsrn = $2 AND activo) AS gsrn,
+       (SELECT count(*)::int FROM public."StockLot" WHERE id = $3::uuid AND "quantityOnHand" = 5) AS lote_a,
+       (SELECT count(*)::int FROM public."StockLot" WHERE id = $4::uuid AND "quantityOnHand" = 0) AS lote_b`,
+    [IDS_DOD.episodio, GSRN_PACIENTE_DOD, IDS_DOD.stockLotA, IDS_DOD.stockLotB],
+  );
+  console.log(`DoD farmacia: episodio=${chkDod.episodio} gsrn=${chkDod.gsrn} lote_a(qty5)=${chkDod.lote_a} lote_b(qty0)=${chkDod.lote_b}`);
+  if (chkDod.episodio < 1 || chkDod.gsrn < 1 || chkDod.lote_a < 1 || chkDod.lote_b < 1) {
+    throw new Error('Verificación de fixtures DoD farmacia falló — revisar salida anterior');
   }
 
   // ─── Verificación final ───────────────────────────────────────────────────

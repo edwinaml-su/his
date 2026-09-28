@@ -164,6 +164,23 @@ jobs:
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/206_audit_write_path.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/213_domain_event_dual_context.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
+          # 22: extiende fn_audit_row a Prescription/PrescriptionItem/
+          # MedicationDispense/MedicationAdministration/StockItem (y más,
+          # Wave 6-8) — sin esto /audit no muestra NINGUNA fila para el
+          # circuito de farmacia (hallazgo @QA, apps/web/e2e/dod/
+          # farmacia-circuito.spec.ts, 2026-09-28: 0 filas en audit."AuditLog"
+          # para una Prescription recién creada). Idempotente (DROP+CREATE
+          # por tabla).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/22_audit_triggers_phase2.sql
+          # 210/211 (CC-0026 Ola 2) — `ece.indicaciones_medicas.tipo_indicacion`/
+          # `fecha_firma` y `ece.indicacion_item.drug_id`/`detalle`: sin estas
+          # columnas, CUALQUIER create()/firmar() de /ece/indicaciones/nueva
+          # revienta con 42703 (column does not exist) — el CPOE completo
+          # (y con él, ADR 0023 "punto único de prescripción") queda inerte
+          # en la BD efímera. Mismo hallazgo que 22 arriba. Idempotente
+          # (ADD COLUMN IF NOT EXISTS + guardas propias).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/210_cc0026_indicacion_tipo.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/211_cc0026_indicacion_item_estructura.sql
           # docs/48 C5-2 — "ServicePriceList"/"ServicePriceListItem"/
           # "ServiceCategory"/"ServicePriceRule" son tablas fuera de
           # schema.prisma por diseño (drift documentado en CLAUDE.md): `db

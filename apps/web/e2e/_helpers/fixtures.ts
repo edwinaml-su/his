@@ -50,6 +50,38 @@ export const E2E_GS1 = {
 } as const;
 
 /**
+ * DoD (docs/46_gobierno_de_producto.md §5) — fixtures dedicados de
+ * apps/web/e2e/dod/farmacia-circuito.spec.ts. Namespace `e2ef3000`, sembrados
+ * por packages/database/scripts/seed-e2e-fixtures.mjs §8. A propósito NO
+ * incluye un `indicationId` ni `prescriptionId` — el spec los crea de verdad
+ * por UI (CPOE → firmar) para ejercitar el consumer real de ADR 0023
+ * (materializePrescripcionFromIndicacion), a diferencia de E2E_FIXTURES
+ * arriba, que sí trae `indicationId` pre-conciliado por atajo de seed.
+ */
+export const E2E_DOD_FARMACIA = {
+  /** public."Patient".id / ece.paciente.id — "Ana Circuito DoD". */
+  patientId: "e2ef3000-0000-4000-8000-000000000001",
+  /** ece.episodio_atencion.id (hospitalario, abierto) — para /ece/indicaciones/nueva?episodioId=. */
+  episodioId: "e2ef3000-0000-4000-8000-000000000005",
+  /** GSRN-18 de la pulsera de Ana Circuito DoD. */
+  gsrnPaciente: "801874130000000035",
+  /** Drug A — con stock real (5 u.), se dispensa y se administra por bedside. */
+  drugA: {
+    genericName: "Cefotaxima DoD E2E",
+    searchTerm: "Cefotaxima DoD",
+    gtin: "07501000105007",
+    lote: "LOTE-DOD-CEFO-01",
+  },
+  /** Drug B — lote sembrado con quantityOnHand=0: hard stop STOCK_INSUFICIENTE real. */
+  drugB: {
+    genericName: "Vancomicina DoD E2E",
+    searchTerm: "Vancomicina DoD",
+    gtin: "07501000106004",
+    lote: "LOTE-DOD-VANCO-00",
+  },
+} as const;
+
+/**
  * RN-HIS-BOT-001 (docs/48 C5-2) — ids/GTIN/códigos sembrados por
  * packages/database/scripts/seed-e2e-fixtures.mjs §7. Mismo namespace
  * e2ef2000 en ambos archivos (helper `botId` duplicado a propósito — un
