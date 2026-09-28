@@ -203,13 +203,32 @@ describe("eceCertificacionRouter", () => {
      * listada) o repetirlas (id menor, fecha posterior). Este test falla
      * contra ese código: no había NINGÚN `di.id` en el ORDER BY, y el WHERE
      * usaba solo `di.id`, nunca la columna de orden.
+     *
+     * `expectedColumn`/`expectedDirection` atan cada modo a su columna y
+     * sentido reales (hallazgo menor de revisión) — antes el test solo
+     * verificaba consistencia interna (ORDER BY = comparador = WHERE) sin
+     * comprobar que CADA modo usara lo que dice su label, así que pasaba
+     * igual si alguien intercambiaba las columnas/direcciones entre modos.
+     * `expectedColumn` es `creado_en` en ambos porque `ece.documento_instancia`
+     * no tiene `actualizado_en` en prod (ver comentario junto a `sortColumn`
+     * en el router) — lo que sí debe variar por modo es la dirección.
      */
     it.each([
-      { incluirCertificados: false, label: "creado_en ASC (cola pendiente)" },
-      { incluirCertificados: true, label: "actualizado_en DESC (histórico)" },
+      {
+        incluirCertificados: false,
+        label: "creado_en ASC (cola pendiente)",
+        expectedColumn: "creado_en",
+        expectedDirection: "ASC",
+      },
+      {
+        incluirCertificados: true,
+        label: "creado_en DESC (histórico)",
+        expectedColumn: "creado_en",
+        expectedDirection: "DESC",
+      },
     ])(
       "usa un cursor compuesto (columna de orden + id) coherente con el ORDER BY — $label",
-      async ({ incluirCertificados }) => {
+      async ({ incluirCertificados, expectedColumn, expectedDirection }) => {
         setupWorkflowContext();
         prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
@@ -229,6 +248,12 @@ describe("eceCertificacionRouter", () => {
         expect(orderMatch).not.toBeNull();
         const [, sortColumn, sortDirection, idDirection] = orderMatch!;
         expect(idDirection).toBe(sortDirection);
+
+        // Ata el modo a SU columna y dirección reales — no solo consistencia
+        // interna. Detecta un swap entre modos (p.ej. cola pendiente ordenada
+        // por DESC, o histórico apuntando de nuevo a una columna inexistente).
+        expect(sortColumn).toBe(expectedColumn);
+        expect(sortDirection).toBe(expectedDirection);
 
         // El WHERE del cursor debe filtrar por la MISMA columna del ORDER BY
         // + id (tupla), resolviendo la fecha real de la fila-cursor por PK —
@@ -250,6 +275,30 @@ describe("eceCertificacionRouter", () => {
         expect(cursorParam).toBe(INSTANCIA_ID);
       },
     );
+
+    /**
+     * Hallazgo menor de revisión — el camino SIN cursor (primera página) no
+     * tenía cobertura: nada comprobaba que el WHERE no trajera la tupla de
+     * paginación, que el ORDER BY igual desempatara por `di.id`, ni que el
+     * LIMIT cayera en `$2` con exactamente 2 params (`[estadoFiltro, limit]`).
+     */
+    it("primera página (sin cursor): sin WHERE de tupla, ORDER BY con desempate por id, LIMIT $2 y 2 params", async () => {
+      setupWorkflowContext();
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      await caller.listCola({});
+
+      const call = prisma.$queryRawUnsafe.mock.calls[0]!;
+      const [sql, ...params] = call as [string, ...unknown[]];
+
+      expect(sql).not.toMatch(/\(di\.\w+, di\.id\)/);
+      expect(sql).toMatch(/ORDER BY di\.creado_en ASC, di\.id ASC/);
+      expect(sql).toMatch(/LIMIT \$2\s*$/);
+      expect(params).toHaveLength(2);
+    });
   });
 
   // -------------------------------------------------------------------------

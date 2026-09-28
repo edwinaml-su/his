@@ -361,7 +361,8 @@ export const eceCertificacionRouter = router({
    * Lista documentos en estado 'validado' pendientes de certificación DIR.
    * Ordenados por antigüedad (los más viejos primero — FIFO de cola).
    * Con `incluirCertificados: true` devuelve también los ya certificados
-   * (histórico, orden DESC por último cambio).
+   * (histórico, orden DESC por `creado_en` — no hay columna de "último
+   * cambio" en prod; ver comentario junto a `sortColumn` más abajo).
    */
   listCola: dirProcedure
     .input(listColaCertificacionInput)
@@ -415,7 +416,27 @@ export const eceCertificacionRouter = router({
       // id como desempate) resolviendo la fecha real de la fila-cursor con
       // una subquery por PK — el cliente sigue mandando el mismo `id` plano
       // de siempre, el contrato de `cursor` no cambia.
-      const sortColumn = input.incluirCertificados ? "actualizado_en" : "creado_en";
+      //
+      // Corrección post-revisión (hallazgo mayor) — `ece.documento_instancia`
+      // NO tiene columna `actualizado_en` en prod (verificado vía
+      // information_schema.columns sobre ejacvsgbewcerxtjtwto: solo trae id,
+      // tipo_documento_id, episodio_id, paciente_id, registro_id,
+      // estado_actual_id, version, estado_registro, creado_por, creado_en,
+      // confidencial), tampoco existe en sql/60_ece_05_motor.sql ni en
+      // schema.prisma — drift ya registrado en
+      // docs/uat/e2e-2026-06-10/inventario_drift_ece.md:68. El SELECT que la
+      // referenciaba (ver `ultimo_cambio_en` más abajo) hacía fallar
+      // `listCola` en AMBOS modos con 42703, incluso antes de este fix de
+      // keyset — no era algo introducido por el keyset, pero el keyset sí
+      // sumaba 3 referencias más (ORDER BY, tupla del WHERE y subquery del
+      // cursor en modo histórico). Agregar la columna requiere una migración
+      // SQL aplicada contra prod (fuera de alcance: esta sesión solo tiene
+      // lectura sobre la BD real) — mientras tanto, ambos modos ordenan por
+      // `creado_en` (inmutable, ya existe). Efecto colateral positivo: cierra
+      // también el hallazgo menor de drift de paginación por columna mutable
+      // (un `actualizado_en` que cambia entre páginas haría que la fila-cursor
+      // saltara al tope en la siguiente lectura).
+      const sortColumn = "creado_en";
       const sortDirection = input.incluirCertificados ? "DESC" : "ASC";
       const cursorComparator = sortDirection === "ASC" ? ">" : "<";
 
@@ -432,7 +453,7 @@ export const eceCertificacionRouter = router({
           dih.ejecutado_por  AS validado_por,
           ps.nombre_completo AS validado_por_nombre,
           di.creado_en,
-          di.actualizado_en  AS ultimo_cambio_en
+          di.creado_en       AS ultimo_cambio_en
         FROM ece.documento_instancia di
         JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
         JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
