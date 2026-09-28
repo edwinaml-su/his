@@ -50,6 +50,7 @@ import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
 import { withWorkflowContext } from "../../workflow/context";
 import { withEceContext } from "../../ece/rls-context";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ─── Schemas Zod (inline para compatibilidad con worktree) ──────────────────
 // Los schemas canónicos viven en @his/contracts/src/schemas/ece-triaje.ts;
@@ -324,12 +325,18 @@ export const triajeEceRouter = router({
       }
 
       // 2. Verificar que firmaId pertenece al usuario y está activa.
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de fusionar el lookup de identidad dentro del JOIN de firma —
+      // separados, la falta de personal_salud da un diagnóstico específico en
+      // vez de cualquier firma existente para otro personal_id "no pertenece".
+      const personal = await requirePersonalSalud(tx, ctx.user.id, {
+        action: "firmar la hoja de triaje ECE",
+      });
       const firmaRows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
         SELECT fe.id::text
         FROM ece.firma_electronica fe
-        JOIN ece.personal_salud ps ON ps.id = fe.personal_id
         WHERE fe.id = ${input.firmaId}::uuid
-          AND ps.his_user_id = ${ctx.user.id}::uuid
+          AND fe.personal_id = ${personal.id}::uuid
           AND fe.revoked_at IS NULL
         LIMIT 1
       `);

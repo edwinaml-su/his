@@ -41,6 +41,7 @@ const EPISODIO_ATEN_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const EPICRISIS_ID      = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const PACIENTE_ID       = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const MEDICO_ID         = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const PERSONAL_ID       = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const ORG_ID            = MOCK_TENANT.organizationId;
 const ESTAB_ID          = MOCK_TENANT.establishmentId ?? "11111111-1111-1111-1111-111111111111";
 
@@ -67,6 +68,13 @@ const DETALLE_ROW = {
   motivo_ingreso: "Dolor abdominal severo",
   orden_ingreso_id: "33333333-0000-0000-0000-000000000000",
   documentos_firmados_count: 2,
+};
+
+// Fila cruda de ece.personal_salud — shape del resolver canónico (R03).
+const PERSONAL_ROW = {
+  id: PERSONAL_ID,
+  nombre_completo: "Dr. Alta Médica",
+  establecimiento_id: ESTAB_ID,
 };
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -334,6 +342,9 @@ describe("eceEpisodioHospitalarioRouter", () => {
         paciente_id: PACIENTE_ID,
         episodio_hosp_id: EPISODIO_HOSP_ID,
       }]);
+      // R03: requirePersonalSalud (identity-resolver) — resuelto una vez, reusado
+      // para documento_instancia EPICRISIS y para episodio_estado_log.
+      prisma.$queryRaw.mockResolvedValueOnce([PERSONAL_ROW]);
       // INSERT documento_instancia EPICRISIS (instancia-first) → retorna instanciaEpiId
       prisma.$queryRaw.mockResolvedValueOnce([{ id: "di-epi-0000-0000-000000000001" }]);
       // INSERT epicrisis_egreso → retorna epicrisisId
@@ -396,6 +407,8 @@ describe("eceEpisodioHospitalarioRouter", () => {
         estado_epicrisis: "firmado",
         paciente_id: PACIENTE_ID,
       }]);
+      // R03: resolvePersonalSalud (identity-resolver) para cambiado_por.
+      prisma.$queryRaw.mockResolvedValueOnce([PERSONAL_ROW]);
 
       const caller = makePhysicianCaller(prisma);
       const result = await caller.confirmarAlta(VALID_CONFIRM);

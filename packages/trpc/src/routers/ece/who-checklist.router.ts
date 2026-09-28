@@ -22,6 +22,7 @@ import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
 import type { PrismaClient } from "@prisma/client";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod — ítem WHO individual
@@ -121,24 +122,22 @@ type ChecklistRow = {
  * EceContext. Sin este envoltorio, RLS de `ece.who_checklist` no aplica y
  * un usuario podría leer/modificar checklists de cualquier establecimiento
  * conociendo solo el actoQuirurgicoId.
+ *
+ * R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+ * en vez de reimplementar el lookup. Corre en `ctx.prisma` directo (BYPASSRLS)
+ * a propósito, igual que otros bootstraps ECE: el `EceContext` que este
+ * helper arma es lo que luego abre el contexto RLS, así que no puede
+ * requerirlo primero.
  */
 async function buildEceCtx(
   prisma: PrismaClient,
   userId: string,
   establecimientoId: string,
 ): Promise<EceContext> {
-  const personalRows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid
-    LIMIT 1
-  `;
-  if (personalRows.length === 0) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No existe registro de personal de salud para este usuario.",
-    });
-  }
-  return { personalId: personalRows[0]!.id, establecimientoId };
+  const personal = await requirePersonalSalud(prisma, userId, {
+    action: "usar el WHO Surgical Safety Checklist",
+  });
+  return { personalId: personal.id, establecimientoId };
 }
 
 function resolveEstablecimiento(ctx: { tenant: { establishmentId?: string } }): string {

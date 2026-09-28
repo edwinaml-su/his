@@ -51,6 +51,7 @@ import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 import {
   linkTriageInput,
   unlinkTriageInput,
@@ -443,29 +444,37 @@ export const eceBridgeTriageRouter = router({
           };
         }
 
+        // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+        // en vez de fusionar el lookup de identidad dentro del JOIN de negocio
+        // — `input.registradoPorId` es un HIS User id provisto por el cliente
+        // (no necesariamente ctx.user.id, p.ej. al promover un triaje HIS
+        // registrado por otro enfermero), así que igual necesita resolverse
+        // contra ece.personal_salud.
+        const personalRegistrador = await requirePersonalSalud(rawTx, input.registradoPorId, {
+          action: "registrar el triaje ECE",
+        });
+
         // Crear documento_instancia TRIAJE primero (instancia-first, instancia_id NOT NULL).
         const instanciaResult = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
-        ) => Promise<Array<{ id: string; personal_id: string }>>)`
+        ) => Promise<Array<{ id: string }>>)`
           INSERT INTO ece.documento_instancia (
             tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por
           )
-          SELECT td.id, ep.id, ep.paciente_id, fe.id, ps.id
+          SELECT td.id, ep.id, ep.paciente_id, fe.id, ${personalRegistrador.id}::uuid
           FROM ece.tipo_documento td
           JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
           JOIN ece.episodio_atencion ep ON ep.id = ${input.episodioId}::uuid
-          JOIN ece.personal_salud ps ON ps.his_user_id = ${input.registradoPorId}::uuid AND ps.activo = true
           WHERE td.codigo = 'TRIAJE' AND td.activo = true
           LIMIT 1
-          RETURNING id::text, creado_por::text AS personal_id
+          RETURNING id::text
         `;
         const instanciaId = instanciaResult[0]?.id;
-        const personalId  = instanciaResult[0]?.personal_id;
-        if (!instanciaId || !personalId) {
+        if (!instanciaId) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: "Tipo documento TRIAJE no configurado o profesional no encontrado.",
+            message: "Tipo documento TRIAJE no configurado.",
           });
         }
 
@@ -476,7 +485,7 @@ export const eceBridgeTriageRouter = router({
           nivelPrioridad,
           destinoAsignado: input.destinoAsignado ?? null,
           signosVitalesId: input.signosVitalesId ?? null,
-          registradoPorId: personalId,
+          registradoPorId: personalRegistrador.id,
           hisTriageId: input.triageId,
         });
 
@@ -562,27 +571,30 @@ export const eceBridgeTriageRouter = router({
           await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
             const rawTx2 = tx as unknown as RawClient;
 
+            // R03: delega al resolver canónico — ver comentario en createEceFromTriage arriba.
+            const syncPersonal = await requirePersonalSalud(rawTx2, input.registradoPorId, {
+              action: "registrar el triaje ECE (sync)",
+            });
+
             // Instancia-first para syncCompletedTriages.
             const syncInstanciaResult = await (rawTx2.$queryRaw as (
               tpl: TemplateStringsArray,
               ...vals: unknown[]
-            ) => Promise<Array<{ id: string; personal_id: string }>>)`
+            ) => Promise<Array<{ id: string }>>)`
               INSERT INTO ece.documento_instancia (
                 tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por
               )
-              SELECT td.id, ep.id, ep.paciente_id, fe.id, ps.id
+              SELECT td.id, ep.id, ep.paciente_id, fe.id, ${syncPersonal.id}::uuid
               FROM ece.tipo_documento td
               JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
               JOIN ece.episodio_atencion ep ON ep.id = ${input.defaultEpisodioId!}::uuid
-              JOIN ece.personal_salud ps ON ps.his_user_id = ${input.registradoPorId}::uuid AND ps.activo = true
               WHERE td.codigo = 'TRIAJE' AND td.activo = true
               LIMIT 1
-              RETURNING id::text, creado_por::text AS personal_id
+              RETURNING id::text
             `;
             const syncInstanciaId = syncInstanciaResult[0]?.id;
-            const syncPersonalId  = syncInstanciaResult[0]?.personal_id;
-            if (!syncInstanciaId || !syncPersonalId) {
-              throw new Error("Tipo TRIAJE no configurado o profesional no encontrado para sync.");
+            if (!syncInstanciaId) {
+              throw new Error("Tipo TRIAJE no configurado para sync.");
             }
 
             eceTriajeId = await insertEceTriaje(rawTx2, {
@@ -592,7 +604,7 @@ export const eceBridgeTriageRouter = router({
               nivelPrioridad,
               destinoAsignado: null,
               signosVitalesId: null,
-              registradoPorId: syncPersonalId,
+              registradoPorId: syncPersonal.id,
               hisTriageId: row.id,
             });
 

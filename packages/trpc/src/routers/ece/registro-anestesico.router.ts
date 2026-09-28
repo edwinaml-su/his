@@ -109,7 +109,7 @@ async function findRegistro(
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup HIS User → ece.personal_salud.
 async function findPersonalId(
   prisma: Pick<PrismaClient, "$queryRaw">,
   userId: string,

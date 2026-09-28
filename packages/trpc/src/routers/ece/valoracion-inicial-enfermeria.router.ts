@@ -157,7 +157,7 @@ async function findValoracion(
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup HIS User → ece.personal_salud.
 async function findPersonalId(
   prisma: Pick<PrismaClient, "$queryRaw">,
   userId: string,
@@ -370,7 +370,7 @@ export const eceValoracionInicialRouter = router({
       }
 
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
-        // firmado_por FK → ece.personal_salud(id); resolver desde his_user_id
+        // firmado_por FK → ece.personal_salud(id); resolver desde el HIS User
         const personalId = await findPersonalId(tx, userId);
         if (!personalId) {
           throw new TRPCError({
@@ -426,7 +426,7 @@ export const eceValoracionInicialRouter = router({
       }
 
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
-        // validado_por FK → ece.personal_salud(id); resolver desde his_user_id
+        // validado_por FK → ece.personal_salud(id); resolver desde el HIS User
         const personalId = await findPersonalId(tx, userId);
         if (!personalId) {
           throw new TRPCError({

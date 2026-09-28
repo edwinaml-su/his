@@ -12,7 +12,7 @@
  *
  * Tablas BD (raw SQL — ece.* no está en schema.prisma):
  *   ece.verbal_order      — ciclo JCI (ver 113_verbal_order.sql)
- *   ece.personal_salud    — mapeo his_user_id → personal ECE
+ *   ece.personal_salud    — mapeo HIS User → personal ECE
  *   ece.firma_electronica — credencial PIN argon2id del MC
  *
  * Roles tRPC:
@@ -86,7 +86,7 @@ function buildEceCtx(ctx: {
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup HIS User → ece.personal_salud.
 async function findPersonal(
   tx: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
   hisUserId: string,

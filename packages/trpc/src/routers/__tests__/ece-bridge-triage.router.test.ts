@@ -37,6 +37,14 @@ const EPISODIO_ID = "44444444-0000-0000-0000-000000000004";
 const PERSONAL_ID = "55555555-0000-0000-0000-000000000005";
 const INSTANCIA_ID = "66666666-0000-0000-0000-000000000006";
 const ORG_ID = MOCK_TENANT.organizationId;
+const ESTABLECIMIENTO_ID = "77777777-0000-0000-0000-000000000007";
+
+/** Fila cruda de ece.personal_salud — shape del resolver canónico (R03). */
+const PERSONAL_SALUD_ROW = {
+  id: PERSONAL_ID,
+  nombre_completo: "Enf. Triaje",
+  establecimiento_id: ESTABLECIMIENTO_ID,
+};
 
 /** TriageEvaluation mock con nivel Manchester 2 (ORANGE → ECE "II"). */
 const MOCK_HIS_TRIAJE = {
@@ -145,12 +153,14 @@ describe("eceBridgeTriageRouter", () => {
 
       // DDL vivo: patrón instancia-first. Secuencia de $queryRaw:
       //   1. idempotencia SELECT (sin ECE previo)
-      //   2. INSERT documento_instancia RETURNING id + personal_id
-      //   3. INSERT ece.hoja_triaje RETURNING id
+      //   2. R03: requirePersonalSalud (identity-resolver) para registradoPorId
+      //   3. INSERT documento_instancia RETURNING id
+      //   4. INSERT ece.hoja_triaje RETURNING id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$queryRaw as any)
         .mockResolvedValueOnce([]) // idempotencia: sin ECE previo
-        .mockResolvedValueOnce([{ id: INSTANCIA_ID, personal_id: PERSONAL_ID }]) // documento_instancia
+        .mockResolvedValueOnce([PERSONAL_SALUD_ROW]) // requirePersonalSalud
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }]) // documento_instancia
         .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT hoja_triaje RETURNING
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -182,7 +192,8 @@ describe("eceBridgeTriageRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$queryRaw as any)
         .mockResolvedValueOnce([]) // idempotencia
-        .mockResolvedValueOnce([{ id: INSTANCIA_ID, personal_id: PERSONAL_ID }]) // documento_instancia
+        .mockResolvedValueOnce([PERSONAL_SALUD_ROW]) // R03: requirePersonalSalud
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }]) // documento_instancia
         .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT hoja_triaje
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

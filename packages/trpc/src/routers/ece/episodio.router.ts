@@ -47,6 +47,7 @@ import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ─── Schemas Zod (definidos localmente — patrón seguido por routers ECE) ─────
 
@@ -500,7 +501,14 @@ export const eceEpisodioRouter = router({
           WHERE id = ${input.episodioId}::uuid
         `;
 
-        // 4. Registrar en bitácora
+        // 4. Registrar en bitácora.
+        // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+        // en vez de reimplementar el lookup ad-hoc. cambiado_por es nullable
+        // (ON DELETE SET NULL) y el comportamiento previo ya toleraba "sin
+        // personal_salud vinculado" insertando NULL — se preserva con
+        // resolvePersonalSalud (no requirePersonalSalud) para no convertir
+        // una transición hoy exitosa en un throw nuevo.
+        const cambiadoPor = await resolvePersonalSalud(tx, ece.personalId);
         await tx.$executeRaw`
           INSERT INTO ece.episodio_estado_log
             (episodio_id, estado_previo, estado_nuevo, cambiado_por, motivo)
@@ -508,7 +516,7 @@ export const eceEpisodioRouter = router({
             ${input.episodioId}::uuid,
             ${estadoActual},
             ${input.nuevoEstado},
-            (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
+            ${cambiadoPor?.id ?? null}::uuid,
             ${input.observacion ?? null}
           )
         `;
