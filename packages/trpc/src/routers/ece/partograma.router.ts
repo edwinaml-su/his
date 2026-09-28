@@ -31,6 +31,7 @@ import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import type { PrismaClient } from "@prisma/client";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 // Schemas inline — evitan dependencia de symlink en worktree
 // (patrón establecido en atencion-emergencia.router.ts)
 
@@ -150,24 +151,22 @@ function resolveEceCtx(ctx: {
  * HF-06 (audit Stream F): resuelve personal_salud del usuario y devuelve
  * EceContext para envolver queries en `withWorkflowContext`. Sin esto las
  * raw queries se ejecutan como rol bypass-RLS y la defensa en BD no aplica.
+ *
+ * R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+ * en vez de reimplementar el lookup. Corre en `ctx.prisma` directo (BYPASSRLS)
+ * a propósito, igual que otros bootstraps ECE: el `EceContext` que este
+ * helper arma es lo que luego abre el contexto RLS, así que no puede
+ * requerirlo primero.
  */
 async function buildEceCtx(
   prisma: PrismaClient,
   userId: string,
   establecimientoId: string,
 ): Promise<EceContext> {
-  const personalRows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid
-    LIMIT 1
-  `;
-  if (personalRows.length === 0) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No existe registro de personal de salud para este usuario.",
-    });
-  }
-  return { personalId: personalRows[0]!.id, establecimientoId };
+  const personal = await requirePersonalSalud(prisma, userId, {
+    action: "registrar el partograma",
+  });
+  return { personalId: personal.id, establecimientoId };
 }
 
 // ---------------------------------------------------------------------------

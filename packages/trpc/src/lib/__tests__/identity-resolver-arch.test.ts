@@ -55,31 +55,25 @@ const ALLOWLIST: Record<string, string> = {
     "identidad a resolver. Documentado también en la receta de migración " +
     "de identity-resolver.ts (\"otro equipo lo está tocando\").",
 
-  // ── Pendientes de migración — R03 stage 2 (fuera del alcance de esta
-  //    etapa, que cubrió ece/{urpa-recovery..bridge-cirugia}, los primeros
-  //    18 de la lista del hallazgo).
-  "packages/trpc/src/routers/ece/preop-checklist.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/resultado-estudio.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/retencion.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/fall-event.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/bridge-admision.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/comite-ece.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/certificado-incapacidad.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/consentimiento.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/certificado-defuncion.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/atencion-rn.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/solicitud-estudio.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/partograma.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/certificacion.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/acto-quirurgico.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/epicrisis.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece/historia-clinica.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/firma-electronica.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/evolucion-medica.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/pathology.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/lis.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/patient-dedup.router.ts": "Pendiente — R03 stage 2.",
-  "packages/trpc/src/routers/ece-rectificacion.router.ts": "Pendiente — R03 stage 2.",
+  // ── R03 stage 2 (este cambio): los 21 archivos que quedaban en "Pendiente"
+  //    ya están migrados (comentarios reescritos sin el literal, o lookups
+  //    fusionados separados en requirePersonalSalud/resolvePersonalSalud +
+  //    query de negocio acotada por personal.id — certificado-defuncion.ts,
+  //    retencion.ts, partograma.ts, firma-electronica.ts#history). Ver
+  //    identity-resolver.ts para el contrato y la receta de migración.
+  //
+  //    firma-electronica.router.ts es el único que sigue en la allowlist:
+  //    dos de sus procedures (requestRecovery, completeRecovery) son
+  //    publicProcedure PRE-SESIÓN — no hay ctx.user.id del que partir — y
+  //    resuelven en dirección INVERSA a la del módulo (email/firmaId →
+  //    personal_salud → hisUserId, no hisUserId → personal_salud). No son
+  //    drop-in: identity-resolver.ts solo resuelve la dirección hacia
+  //    adelante. Comentados in situ en el router.
+  "packages/trpc/src/routers/firma-electronica.router.ts":
+    "requestRecovery/completeRecovery: publicProcedure pre-sesión, dirección " +
+    "inversa (email o firmaId → personal_salud → hisUserId) — no la que " +
+    "resuelve identity-resolver.ts (hisUserId → personal_salud). El resto " +
+    "del archivo (setup/verify/confirm/status/history) ya delega al resolver.",
 
   // ── Lado de ESCRITURA (alta/vínculo de personal_salud), no de lectura.
   //    identity-resolver.ts documenta explícitamente (punto 4 de la receta)

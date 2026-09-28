@@ -37,7 +37,7 @@
  *   ece.documento_instancia           — estado actual; filtrado por 'validado'
  *   ece.documento_instancia_historial — append-only log de transiciones
  *   ece.firma_electronica             — credencial PIN del DIR (argon2id hash)
- *   ece.personal_salud                — mapeo his_user_id → personal ECE id
+ *   ece.personal_salud                — mapeo usuario HIS → personal ECE id (ver identity-resolver.ts)
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -144,7 +144,7 @@ interface PersonalRow {
 // ---------------------------------------------------------------------------
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup del usuario a ece.personal_salud.
 async function findPersonal(
   prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
   userId: string,

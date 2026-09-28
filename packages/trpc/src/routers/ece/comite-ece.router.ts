@@ -9,7 +9,7 @@
  * ─── Tablas BD ────────────────────────────────────────────────────────────────
  *   ece.comite_minuta               — minutas (inmutables post-firma)
  *   ece.firma_electronica           — credencial PIN del presidente (argon2id)
- *   ece.personal_salud              — mapeo his_user_id → personal ECE id
+ *   ece.personal_salud              — mapeo usuario HIS → personal ECE id (ver identity-resolver.ts)
  *   ece.v_calidad_documental        — vista materializada KPIs (refresh horario)
  *
  * ─── Hash chain ───────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ interface CalidadKpiRow {
 type RawTx = { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> };
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup del usuario a ece.personal_salud.
 async function resolvePersonalId(tx: RawTx, userId: string): Promise<string> {
   const personal = await requirePersonalSalud(tx, userId);
   return personal.id;

@@ -48,11 +48,11 @@ type PersonalRolRow = {
 };
 
 /**
- * Resuelve his_user_id → firma electrónica activa en ece.
+ * Resuelve el usuario HIS → firma electrónica activa en ece.
  * Lanza PRECONDITION_FAILED si no existe personal ECE o firma sin configurar.
  *
- * R03: delega al resolver canónico en vez de reimplementar el lookup
- * his_user_id → ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
+ * R03: delega al resolver canónico en vez de reimplementar el lookup del
+ * usuario a ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
  */
 async function resolveFirma(
   prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },

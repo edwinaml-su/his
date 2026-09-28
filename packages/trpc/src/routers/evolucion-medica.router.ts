@@ -417,7 +417,7 @@ export const evolucionMedicaRouter = router({
     return withEceContext(ctx.prisma, ctx, async (tx) => {
       // Resolver personal_id del usuario
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const personal = await requirePersonalSalud(tx, ctx.user.id);
       const personalId = personal.id;
 
@@ -526,7 +526,7 @@ export const evolucionMedicaRouter = router({
 
       // Resolver personal_id del usuario para comparar con registrado_por
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const autor = await resolvePersonalSalud(tx, ctx.user.id);
       if (!autor || autor.id !== evol.registrado_por) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Solo el autor puede editar la evolución." });
@@ -595,7 +595,7 @@ export const evolucionMedicaRouter = router({
 
         // Resolver personal_id del usuario firmante
         // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-        // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+        // en vez de reimplementar el lookup del usuario a ece.personal_salud.
         const firmante = await requirePersonalSalud(tx, ctx.user.id);
         const personalId = firmante.id;
 
@@ -661,7 +661,7 @@ export const evolucionMedicaRouter = router({
         }
 
         // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-        // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+        // en vez de reimplementar el lookup del usuario a ece.personal_salud.
         const validador = await requirePersonalSalud(tx, ctx.user.id);
         const personalId = validador.id;
 

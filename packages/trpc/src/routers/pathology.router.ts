@@ -128,7 +128,7 @@ const LOCKOUT_MAX = 5;
  * Verifica el PIN argon2id del patólogo contra `ece.firma_electronica`.
  * Replica el patrón de `solicitud-estudio.router.ts` (misma tabla de firma).
  * Lanza TRPCError si:
- *   - No existe personal_salud vinculado al his_user_id.
+ *   - No existe personal_salud vinculado al usuario.
  *   - No hay firma electrónica configurada.
  *   - La firma está bloqueada por intentos fallidos.
  *   - El PIN es incorrecto (incrementa failed_attempts, puede bloquear).
@@ -145,8 +145,8 @@ async function verifyPinOrThrow(
     locked_until: Date | null;
   }
 
-  // R03: delega al resolver canónico en vez de reimplementar el lookup
-  // his_user_id → ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
+  // R03: delega al resolver canónico en vez de reimplementar el lookup del
+  // usuario a ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
   const personal = await requirePersonalSalud(tx, hisUserId, {
     action: "verificar su firma electrónica",
   });

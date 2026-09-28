@@ -105,9 +105,15 @@ function makeCertRow(overrides: Partial<{
   };
 }
 
-function makePersonalFirmaRow(pinHash = "hash-correcto") {
+// R03 stage 2: resolvePersonal ahora separa el lookup de identidad
+// (ece.personal_salud, vía requirePersonalSalud) del lookup de firma
+// (ece.firma_electronica) — dos queries en vez de un JOIN fusionado.
+function makePersonalRow() {
+  return { id: PERSONAL_ID };
+}
+
+function makeFirmaRow(pinHash = "hash-correcto") {
   return {
-    id: PERSONAL_ID,
     pin_hash: pinHash,
     failed_attempts: 0,
     locked_until: null,
@@ -283,7 +289,8 @@ describe("eceCertDefRouter", () => {
       mockTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -297,7 +304,8 @@ describe("eceCertDefRouter", () => {
       mockTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
       await expect(caller.firmar({ id: CERT_ID, pin: PIN_INCORRECTO })).rejects.toMatchObject({
@@ -324,7 +332,8 @@ describe("eceCertDefRouter", () => {
       mockTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -338,7 +347,8 @@ describe("eceCertDefRouter", () => {
       mockTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
       await expect(caller.validar({ id: CERT_ID, firmaPin: PIN_INCORRECTO })).rejects.toMatchObject({
@@ -373,7 +383,8 @@ describe("eceCertDefRouter", () => {
       mockTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "validado" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
@@ -444,7 +455,8 @@ describe("eceCertDefRouter", () => {
       // firmar
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const mcCaller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -454,7 +466,8 @@ describe("eceCertDefRouter", () => {
       // validar — B-03: con PIN
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const validado = await mcCaller.validar({ id: CERT_ID, firmaPin: PIN_CORRECTO });
@@ -463,7 +476,8 @@ describe("eceCertDefRouter", () => {
       // certificar
       prisma.$queryRaw
         .mockResolvedValueOnce([makeCertRow({ estado_workflow: "validado" })])
-        .mockResolvedValueOnce([makePersonalFirmaRow()]);
+        .mockResolvedValueOnce([makePersonalRow()])
+        .mockResolvedValueOnce([makeFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const dirCaller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
