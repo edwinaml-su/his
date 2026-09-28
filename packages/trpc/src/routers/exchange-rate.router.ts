@@ -29,6 +29,15 @@
  * TODO(Sprint 2): permission check específico (solo ADMIN_FIN puede `create`).
  * TODO(Sprint 2): exponer `bulkImport` para la integración real BCR.
  * TODO(Sprint 5): tasa cruzada (from -> USD -> to) cuando no hay par directo.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. "ExchangeRate" es un catalogo GLOBAL (tasas de cambio
+ * pais/moneda, sin columna organizationId). Verificado en prod (read-only):
+ * su unica policy es fx_select_all (SELECT, qual=true, rol public) - NO
+ * existe policy de INSERT para `authenticated`, asi que `create` requiere el
+ * rol BYPASSRLS. El control de acceso real es `tenantProcedure` (cualquier
+ * usuario con tenant puede leer/crear tasas hoy - TODO(Sprint 2) ya anotado
+ * arriba para restringir `create` a ADMIN_FIN, sin relacion con RLS).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

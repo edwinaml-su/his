@@ -12,6 +12,13 @@
  *
  * path — dado un tipDocumentoId + secuencia de acciones, recorre el flujo
  *   y devuelve el estado en cada paso (para visualización de simulación completa).
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext/withEceContext. Router 100% de lectura (`simulate`/`path`
+ * son `.query`, nunca mutan BD) sobre `ece.flujo_estado`/`ece.flujo_transicion`,
+ * catalogo GLOBAL cuya unica policy es `catalogo_read_all` (SELECT,
+ * qual=true, verificado en prod read-only) - no hay aislamiento de tenant que
+ * aplicar. Control de acceso: `requireRole(["DIR","WORKFLOW_DESIGNER"])`.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

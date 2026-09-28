@@ -18,6 +18,17 @@
  *
  * TODO(Sprint 2): chequeo de rol específico (`requireRole(["SUPER_ADMIN"])`)
  * cuando el RBAC quede consolidado en @his/contracts.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. "Country"/"CountryCurrency" son catalogos GLOBALES (sin
+ * columna organizationId) compartidos por todo el multi-pais. Verificado en
+ * prod (read-only): sus unicas policies son Country_select_all/
+ * CountryCurrency_select_all (SELECT, qual=true, rol public) - NO existe
+ * policy de INSERT/UPDATE/DELETE para `authenticated`. Demotar el rol
+ * romperia create/update/deactivate/activate (unico rol capaz de escribir es
+ * el BYPASSRLS de servicio). El control de acceso real hoy es
+ * `protectedProcedure` (TODO pendiente de Sprint 2 arriba, sin relacion con
+ * RLS) - no se toca en este lote.
  */
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";

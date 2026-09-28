@@ -15,9 +15,23 @@
  * del spec original se reemplazan por queryByEquipment y queryByOrigin.
  *
  * Autorización: requireRole(["DIR","ARCH","ADMIN"]).
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (a), MIGRADO a
+ * withTenantContext. Verificado en prod (read-only): ece.epcis_event_equipment
+ * tiene RLS con policies epcis_event_equipment_select/_insert que exigen
+ * EXISTS (... "BiomedicalEquipment" be WHERE be.id = equipment_id AND
+ * (be."organizationId" = current_org_id() OR is_break_glass())) - exactamente
+ * el aislamiento por tenant que applyTenantContext setea via app.current_org_id.
+ * Antes de este cambio las 4 queries corrian con ctx.prisma.$queryRawUnsafe
+ * directo (rol BYPASSRLS de Supabase) sin ningun filtro de organizacion en el
+ * WHERE - un DIR/ARCH/ADMIN de una organizacion podia leer trazabilidad de
+ * equipos de OTRA organizacion con solo conocer el equipmentId/GLN. Ninguna
+ * policy nueva fue necesaria: la existente ya cubre el caso una vez que el rol
+ * se demota a authenticated.
  */
 import { z } from "zod";
 import { router, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ─── Tipos raw SQL ─────────────────────────────────────────────────────────────
 
@@ -82,16 +96,16 @@ export const epcisQueryRouter = router({
       params.push(input.fechaHasta);
     }
 
-    const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
-      `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event_equipment
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY registrado_en DESC
-       LIMIT 200`,
-      ...params,
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.$queryRawUnsafe<EpcisEventRow[]>(
+        `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
+         FROM ece.epcis_event_equipment
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY registrado_en DESC
+         LIMIT 200`,
+        ...params,
+      ),
     );
-
-    return rows;
   }),
 
   /**
@@ -111,16 +125,16 @@ export const epcisQueryRouter = router({
       params.push(input.fechaHasta);
     }
 
-    const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
-      `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event_equipment
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY registrado_en DESC
-       LIMIT 200`,
-      ...params,
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.$queryRawUnsafe<EpcisEventRow[]>(
+        `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
+         FROM ece.epcis_event_equipment
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY registrado_en DESC
+         LIMIT 200`,
+        ...params,
+      ),
     );
-
-    return rows;
   }),
 
   /**
@@ -151,16 +165,16 @@ export const epcisQueryRouter = router({
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
-      `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event_equipment
-       ${where}
-       ORDER BY registrado_en DESC
-       LIMIT 200`,
-      ...params,
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.$queryRawUnsafe<EpcisEventRow[]>(
+        `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
+         FROM ece.epcis_event_equipment
+         ${where}
+         ORDER BY registrado_en DESC
+         LIMIT 200`,
+        ...params,
+      ),
     );
-
-    return rows;
   }),
 
   /**
@@ -182,16 +196,16 @@ export const epcisQueryRouter = router({
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
-      `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event_equipment
-       ${where}
-       ORDER BY registrado_en DESC
-       LIMIT $${idx}`,
-      ...params,
-      input.limit,
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.$queryRawUnsafe<EpcisEventRow[]>(
+        `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
+         FROM ece.epcis_event_equipment
+         ${where}
+         ORDER BY registrado_en DESC
+         LIMIT $${idx}`,
+        ...params,
+        input.limit,
+      ),
     );
-
-    return rows;
   }),
 });

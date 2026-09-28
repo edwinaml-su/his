@@ -139,12 +139,45 @@ describe("portal.auth.verifyLogin", () => {
 
 describe("portal.auth.logout", () => {
   let prisma;
-  beforeEach(() => { prisma = mockDeep(); });
+  let tx;
+  beforeEach(() => {
+    prisma = mockDeep();
+    // R02 — logout ahora corre bajo withPortalContext. `tx` es un mock
+    // DISTINTO de `prisma`: si el código llamara a `prisma.portalSession...`
+    // directo (fuera del contexto/rol demotado) las aserciones sobre `tx`
+    // fallarían, a diferencia del mock anterior (`fn(prisma)`) donde
+    // tx === prisma volvía indetectable ese bug.
+    tx = mockDeep();
+    prisma.$transaction.mockImplementation((fn) => fn(tx));
+  });
 
   it("revoca sesiones activas", async () => {
-    prisma.portalSession.updateMany.mockResolvedValue({ count: 1 });
+    tx.portalSession.updateMany.mockResolvedValue({ count: 1 });
     expect(await portalRouter.createCaller(pc(prisma)).auth.logout()).toEqual({ ok: true });
-    expect(prisma.portalSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ accountId: PA }) }));
+    expect(tx.portalSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ accountId: PA }) }));
+  });
+
+  it("R02: corre dentro de withPortalContext (SET LOCAL + demote)", async () => {
+    tx.portalSession.updateMany.mockResolvedValue({ count: 0 });
+    await portalRouter.createCaller(pc(prisma)).auth.logout();
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+
+    // El GUC `app.current_portal_account` se setea con el id de la cuenta...
+    const setContextCall = tx.$executeRawUnsafe.mock.calls.find(([sql]) =>
+      String(sql).includes(PA),
+    );
+    expect(setContextCall).toBeDefined();
+    // ...y el rol se demota a `authenticated` ANTES de la query real.
+    const demoteCall = tx.$executeRawUnsafe.mock.calls.find(([sql]) =>
+      String(sql).includes("SET LOCAL ROLE authenticated"),
+    );
+    expect(demoteCall).toBeDefined();
+    const lastSetLocalOrder = Math.max(...tx.$executeRawUnsafe.mock.invocationCallOrder);
+    expect(lastSetLocalOrder).toBeLessThan(tx.portalSession.updateMany.mock.invocationCallOrder[0]);
+
+    // La query corre sobre el `tx` demotado, no sobre `prisma` directo (BYPASSRLS).
+    expect(tx.portalSession.updateMany).toHaveBeenCalledOnce();
+    expect(prisma.portalSession.updateMany).not.toHaveBeenCalled();
   });
 
   it("UNAUTHORIZED sin portalAccount", async () => {
@@ -154,16 +187,24 @@ describe("portal.auth.logout", () => {
 
 describe("portal.account.enableMfa", () => {
   let prisma;
+  let tx;
   beforeEach(() => {
     prisma = mockDeep();
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
-    // Vault write mock (retorna bigint, valor ignorado por el router).
+    // Vault write mock (retorna bigint, valor ignorado por el router). Corre
+    // sobre `prisma` directo — deliberadamente FUERA de withPortalContext.
     prisma.$executeRaw.mockResolvedValue(1n);
+    // R02 — el find/update de portalAccount ahora corren bajo withPortalContext
+    // (la RPC de Vault de arriba queda fuera del contexto, sin transacción).
+    // `tx` es un mock DISTINTO de `prisma` para poder detectar si el código
+    // corriera esas queries fuera del contexto demotado.
+    tx = mockDeep();
+    prisma.$transaction.mockImplementation((fn) => fn(tx));
   });
 
   it("genera QR server-side y secretForManualEntry (K-07)", async () => {
-    prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
-    prisma.portalAccount.update.mockResolvedValue({});
+    tx.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
+    tx.portalAccount.update.mockResolvedValue({});
     const r = await portalRouter.createCaller(pc(prisma)).account.enableMfa({});
     // K-07: el campo top-level `secret` fue eliminado; en su lugar tenemos:
     //   - qrDataUrl: PNG en base64 generado server-side
@@ -180,22 +221,49 @@ describe("portal.account.enableMfa", () => {
   });
 
   it("NOT_FOUND si cuenta no existe", async () => {
-    prisma.portalAccount.findUnique.mockResolvedValue(null);
+    tx.portalAccount.findUnique.mockResolvedValue(null);
     await expect(portalRouter.createCaller(pc(prisma)).account.enableMfa({})).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("R02: el find+update de portalAccount corren dentro de withPortalContext", async () => {
+    tx.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
+    tx.portalAccount.update.mockResolvedValue({});
+    await portalRouter.createCaller(pc(prisma)).account.enableMfa({});
+    // 2 transacciones separadas (find y update), la RPC de Vault queda fuera.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    // Ambas queries corren sobre el `tx` demotado, no sobre `prisma` directo.
+    expect(tx.portalAccount.findUnique).toHaveBeenCalledOnce();
+    expect(tx.portalAccount.update).toHaveBeenCalledOnce();
+    expect(prisma.portalAccount.findUnique).not.toHaveBeenCalled();
+    expect(prisma.portalAccount.update).not.toHaveBeenCalled();
+    // El rol se demota en ambas transacciones antes de la query.
+    const demoteCalls = tx.$executeRawUnsafe.mock.calls.filter(([sql]) =>
+      String(sql).includes("SET LOCAL ROLE authenticated"),
+    );
+    expect(demoteCalls).toHaveLength(2);
+    // La RPC de Vault sí corre sobre `prisma` directo (fuera del contexto).
+    expect(prisma.$executeRaw).toHaveBeenCalledOnce();
   });
 });
 
 describe("portal.account.verifyMfa", () => {
   let prisma;
+  let tx;
   beforeEach(() => {
     prisma = mockDeep();
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
     // Vault retorna null → activa fallback app-layer para tests legados.
+    // Corre sobre `prisma` directo — deliberadamente FUERA de withPortalContext.
     prisma.$queryRaw.mockResolvedValue([{ get_portal_mfa_secret: null }]);
+    // R02 — el fallback findUnique + el update final corren bajo withPortalContext.
+    // `tx` es un mock DISTINTO de `prisma` para poder detectar si el código
+    // corriera esas queries fuera del contexto demotado.
+    tx = mockDeep();
+    prisma.$transaction.mockImplementation((fn) => fn(tx));
   });
 
   it("PRECONDITION_FAILED sin mfaSecret", async () => {
-    prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: null });
+    tx.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: null });
     await expect(portalRouter.createCaller(pc(prisma)).account.verifyMfa({ code: "123456" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
@@ -213,10 +281,19 @@ describe("portal.account.verifyMfa", () => {
     const h = createHmac("sha1",kb).update(buf).digest(); const off = h[h.length-1]&0x0f;
     const bin = ((h[off]&0x7f)<<24)|((h[off+1]&0xff)<<16)|((h[off+2]&0xff)<<8)|(h[off+3]&0xff);
     const code = (bin%1000000).toString().padStart(6,"0");
-    prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: enc });
-    prisma.portalAccount.update.mockResolvedValue({});
+    tx.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: enc });
+    tx.portalAccount.update.mockResolvedValue({});
     expect(await portalRouter.createCaller(pc(prisma)).account.verifyMfa({ code })).toEqual({ enabled: true });
-    expect(prisma.portalAccount.update).toHaveBeenCalledWith(expect.objectContaining({ data: { mfaEnabled: true } }));
+    expect(tx.portalAccount.update).toHaveBeenCalledWith(expect.objectContaining({ data: { mfaEnabled: true } }));
+    // R02 — fallback findUnique + update final corren dentro de withPortalContext.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    // Ambas queries corren sobre el `tx` demotado, no sobre `prisma` directo.
+    expect(prisma.portalAccount.findUnique).not.toHaveBeenCalled();
+    expect(prisma.portalAccount.update).not.toHaveBeenCalled();
+    const demoteCalls = tx.$executeRawUnsafe.mock.calls.filter(([sql]) =>
+      String(sql).includes("SET LOCAL ROLE authenticated"),
+    );
+    expect(demoteCalls).toHaveLength(2);
   });
 
   it("UNAUTHORIZED con codigo incorrecto", async () => {
@@ -226,7 +303,7 @@ describe("portal.account.verifyMfa", () => {
     const ci = createCipheriv("aes-256-gcm", key, iv);
     const ct = Buffer.concat([ci.update(ts, "utf8"), ci.final()]);
     const enc = JSON.stringify({ v: 1, iv: iv.toString("hex"), tag: ci.getAuthTag().toString("hex"), ct: ct.toString("hex") });
-    prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: enc });
+    tx.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: enc });
     await expect(portalRouter.createCaller(pc(prisma)).account.verifyMfa({ code: "000000" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 });

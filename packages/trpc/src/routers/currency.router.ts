@@ -14,6 +14,14 @@ import { router, publicProcedure, tenantProcedure } from "../trpc";
  *
  * Mantiene compat con `exchangeRates` (consumido por country/organization),
  * por eso lo dejamos.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. "Currency"/"ExchangeRate" son catalogos GLOBALES (tasas
+ * de cambio no son propiedad de una organizacion). Verificado en prod
+ * (read-only): Currency_select_all y fx_select_all son policies de SELECT
+ * con qual=true para el rol `public` (sin restriccion de tenant) - este
+ * router es 100% de lectura (list/exchangeRates/listRates/getRate), no hay
+ * mutacion que proteger.
  */
 const fxRateTypeEnum = z.enum(["BUY", "SELL", "AVERAGE", "OFFICIAL", "FISCAL"]);
 export type FxRateType = z.infer<typeof fxRateTypeEnum>;

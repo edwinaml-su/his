@@ -23,6 +23,34 @@
  *   - Manejo defensivo, mensajes en es-SV.
  *
  * NO se registra en `_app.ts` desde aquí — lo hace @Orq.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext (ni un helper "user-only" equivalente). Verificado en
+ * prod (read-only): "User" y "UserCredential" tienen policies self-scoped
+ * (user_self_modify: id = current_user_id(); user_cred_self: userId =
+ * current_user_id()) que calzarian exacto con lo que este router YA hace en
+ * JS (enroll/verify/status filtran siempre por `ctx.user.id`, nunca por un id
+ * ajeno) - a diferencia de user-admin.router.ts, aqui SI seria un caso valido
+ * de migracion. NO se migro en este lote porque:
+ *   1) enroll/verify usan `ctx.prisma.$transaction([...])` en forma de
+ *      ARRAY (batch de operaciones independientes), no la forma callback
+ *      `$transaction(async tx => ...)` que exige inyectar `SET LOCAL
+ *      "app.current_user_id"` antes de las operaciones. Convertir a forma
+ *      callback cambia la semantica de agrupacion de las escrituras.
+ *   2) No existe hoy un helper "solo usuario, sin org" en rls-context.ts
+ *      (`withTenantContext` exige `organizationId`, que este router no tiene
+ *      - `protectedProcedure` no requiere tenant seleccionado). Anadirlo
+ *      solo para este consumidor es especulativo (viola /careful-coding
+ *      "nada especulativo") sin un segundo caso de uso confirmado.
+ *   3) Migrar forzaria reescribir las ~18 pruebas existentes de
+ *      `mfa.router.test.ts` que asumen `prisma.$transaction.mockResolvedValue([...])`
+ *      (forma array), con riesgo de introducir una regresion en un flujo de
+ *      autenticacion sin ganancia de seguridad real (el filtro JS ya es
+ *      exacto).
+ * Recomendacion: PR aislado que (a) introduzca `withUserContext`/
+ * `applyUserContext` en rls-context.ts con su propio test, y (b) migre este
+ * router por separado, verificando la forma array vs callback de
+ * `$transaction` explicitamente. Ver decisions_needed.
  */
 import {
   createCipheriv,

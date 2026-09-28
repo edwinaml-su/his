@@ -77,6 +77,8 @@ describe("portal.account.enableMfa — Vault path (BD-P0-6)", () => {
     prisma = mockDeep();
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
     vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // R02 — el find/update de portalAccount ahora corren bajo withPortalContext.
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
   });
 
   it("llama $executeRaw con set_portal_mfa_secret_vault", async () => {
@@ -126,6 +128,8 @@ describe("portal.account.verifyMfa — Vault path (BD-P0-6)", () => {
   beforeEach(() => {
     prisma = mockDeep();
     process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
+    // R02 — el fallback findUnique + el update final corren bajo withPortalContext.
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
   });
 
   it("happy path: lee desde Vault y habilita MFA", async () => {

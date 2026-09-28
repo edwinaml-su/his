@@ -6,6 +6,13 @@
  *
  * Se invoca con debounce 300ms desde el hook useWorkflowValidator del editor.
  * El resultado incluye el mapa de nodos/aristas afectados para renderizado.
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext/withEceContext. `validateGraph` es 100% de lectura
+ * (`.query`) sobre `ece.rol` (catalogo GLOBAL, policy `catalogo_read_all`
+ * SELECT qual=true verificada en prod read-only) y sobre un grafo que el
+ * cliente pasa por input (nunca lee BD tenant-scoped). Usa `tenantProcedure`
+ * (no `requireRole`) porque no configura nada, solo valida en memoria.
  */
 import { z } from "zod";
 import { Prisma } from "@his/database";

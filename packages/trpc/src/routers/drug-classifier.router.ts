@@ -7,6 +7,20 @@
  *
  * Seguridad: lectura tenantProcedure; escritura requireRole(["ADMIN","PHARM"]).
  * DrugClassifier es catálogo de referencia clínica (acceso directo ctx.prisma).
+ *
+ * R02 (auditoria RLS externa, 2026-09-27) - decision (b), NO usa
+ * withTenantContext. "DrugClassifier" es una tabla puente sin columna
+ * organizationId (mapea Drug -> vocabularios externos ATC/SNOMED/UNSPSC/
+ * RxNorm, catalogo de referencia clinica compartido). Verificado en prod
+ * (read-only): su unica policy es drug_classifier_select (SELECT, qual=true)
+ * - NO existe policy de INSERT/DELETE para `authenticated`, asi que `add`/
+ * `remove` requieren el rol BYPASSRLS para funcionar.
+ * NOTA (fuera de este alcance, no se corrige aqui): `add`/`remove` no
+ * verifican que `drugId` pertenezca a un Drug de la organizacion del caller
+ * (ni a un Drug global, organizationId IS NULL) - un ADMIN/PHARM de una org
+ * podria clasificar un Drug de otra org si conoce su UUID. Es un gap de
+ * autorizacion a nivel app (IDOR), no de RLS/tenant-context - ver
+ * decisions_needed.
  */
 import { z } from "zod";
 import { router, tenantProcedure, requireRole } from "../trpc";
