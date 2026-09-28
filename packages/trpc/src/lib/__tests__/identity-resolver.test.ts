@@ -19,16 +19,25 @@ import {
 
 const HIS_USER_ID = "00000000-0000-0000-0000-0000000000a1";
 const PERSONAL_ID = "00000000-0000-0000-0000-0000000000b2";
+const ESTABLECIMIENTO_ID = "00000000-0000-0000-0000-0000000000c3";
 
-function makeTx(rows: Array<{ id: string; nombre_completo: string }>): PersonalSaludTx {
+function makeTx(
+  rows: Array<{ id: string; nombre_completo: string; establecimiento_id: string }>,
+): PersonalSaludTx {
   return { $queryRaw: vi.fn().mockResolvedValue(rows) };
 }
 
 describe("resolvePersonalSalud", () => {
   it("devuelve la fila mapeada cuando existe personal_salud activo vinculado", async () => {
-    const tx = makeTx([{ id: PERSONAL_ID, nombre_completo: "Dra. Ana Pérez" }]);
+    const tx = makeTx([
+      { id: PERSONAL_ID, nombre_completo: "Dra. Ana Pérez", establecimiento_id: ESTABLECIMIENTO_ID },
+    ]);
     const result = await resolvePersonalSalud(tx, HIS_USER_ID);
-    expect(result).toEqual({ id: PERSONAL_ID, nombreCompleto: "Dra. Ana Pérez" });
+    expect(result).toEqual({
+      id: PERSONAL_ID,
+      nombreCompleto: "Dra. Ana Pérez",
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
   });
 
   it("devuelve null explícito cuando no hay fila — nunca cae a hisUserId", async () => {
@@ -41,18 +50,45 @@ describe("resolvePersonalSalud", () => {
   });
 
   it("consulta con el hisUserId recibido como parámetro de la query", async () => {
-    const tx = makeTx([{ id: PERSONAL_ID, nombre_completo: "Dr. Juan Ruiz" }]);
+    const tx = makeTx([
+      { id: PERSONAL_ID, nombre_completo: "Dr. Juan Ruiz", establecimiento_id: ESTABLECIMIENTO_ID },
+    ]);
     await resolvePersonalSalud(tx, HIS_USER_ID);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
     const call = vi.mocked(tx.$queryRaw).mock.calls[0]!;
     // Segundo argumento posicional del tagged template es el valor interpolado.
     expect(call[1]).toBe(HIS_USER_ID);
   });
+
+  it("con includeInactive: true, la query NO filtra por activo (lecturas de auditoría)", async () => {
+    const tx = makeTx([
+      { id: PERSONAL_ID, nombre_completo: "Dr. Inactivo", establecimiento_id: ESTABLECIMIENTO_ID },
+    ]);
+    const result = await resolvePersonalSalud(tx, HIS_USER_ID, { includeInactive: true });
+    expect(result).toEqual({
+      id: PERSONAL_ID,
+      nombreCompleto: "Dr. Inactivo",
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
+    const call = vi.mocked(tx.$queryRaw).mock.calls[0]!;
+    const sqlStrings = (call[0] as TemplateStringsArray).join("");
+    expect(sqlStrings).not.toMatch(/activo/);
+  });
+
+  it("sin includeInactive (default), la query SÍ filtra por activo = true", async () => {
+    const tx = makeTx([]);
+    await resolvePersonalSalud(tx, HIS_USER_ID);
+    const call = vi.mocked(tx.$queryRaw).mock.calls[0]!;
+    const sqlStrings = (call[0] as TemplateStringsArray).join("");
+    expect(sqlStrings).toMatch(/activo = true/);
+  });
 });
 
 describe("requirePersonalSalud", () => {
   it("devuelve la fila cuando resolvePersonalSalud la encuentra", async () => {
-    const tx = makeTx([{ id: PERSONAL_ID, nombre_completo: "Dra. Ana Pérez" }]);
+    const tx = makeTx([
+      { id: PERSONAL_ID, nombre_completo: "Dra. Ana Pérez", establecimiento_id: ESTABLECIMIENTO_ID },
+    ]);
     const result = await requirePersonalSalud(tx, HIS_USER_ID);
     expect(result.id).toBe(PERSONAL_ID);
   });

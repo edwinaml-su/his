@@ -180,7 +180,7 @@ async function findResultado(tx: RawTx, id: string): Promise<ResultadoRow | null
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup del usuario a ece.personal_salud.
 async function findPersonal(tx: RawTx, hisUserId: string): Promise<{ id: string } | null> {
   return resolvePersonalSalud(tx, hisUserId);
 }

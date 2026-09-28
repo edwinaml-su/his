@@ -307,7 +307,7 @@ function hashRecoveryToken(token: string): string {
 
 /**
  * Busca el personal_salud vinculado al usuario HIS.
- * La FK `his_user_id` en ece.personal_salud referencia public."User".id.
+ * FK (columna puente) en ece.personal_salud referencia public."User".id.
  *
  * R03: delega al resolver canónico (`packages/trpc/src/lib/identity-resolver.ts`)
  * en vez de reimplementar el query — este archivo era una de las 48
@@ -535,7 +535,7 @@ export async function checkPin(
 export const firmaElectronicaRouter = router({
   /**
    * Crea el PIN inicial del personal de salud.
-   * Requiere que `ece.personal_salud` ya tenga un registro con his_user_id = ctx.user.id.
+   * Requiere que `ece.personal_salud` ya tenga un registro vinculado a ctx.user.id.
    * Falla con CONFLICT si ya existe una firma activa.
    */
   setup: protectedProcedure
@@ -665,6 +665,11 @@ export const firmaElectronicaRouter = router({
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
 
       // Buscar el personal por email del usuario HIS asociado.
+      // NO migrable a identity-resolver.ts: publicProcedure pre-sesión, el
+      // input es un email (no un hisUserId de sesión) y la dirección es
+      // inversa (email → User → personal_salud → firma), no la que resuelve
+      // el módulo (hisUserId → personal_salud). Ver ALLOWLIST en
+      // identity-resolver-arch.test.ts.
       const rows = await (ctx.prisma.$queryRaw as (
         query: TemplateStringsArray,
         ...values: unknown[]
@@ -745,6 +750,10 @@ export const firmaElectronicaRouter = router({
       const firmaId = firmaRow.id;
 
       // Obtener el userId a partir de la firma.
+      // NO migrable a identity-resolver.ts: dirección inversa (firmaId →
+      // personal_salud → hisUserId), no la que resuelve el módulo (hisUserId
+      // → personal_salud) — y publicProcedure pre-sesión, no hay ctx.user del
+      // que partir. Ver ALLOWLIST en identity-resolver-arch.test.ts.
       const userRows = await (ctx.prisma.$queryRaw as (
         query: TemplateStringsArray,
         ...values: unknown[]
@@ -908,11 +917,25 @@ export const firmaElectronicaRouter = router({
         }
       }
 
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup como subquery inline. Sin fila
+      // personal_salud no hay accesos que mostrar — historial vacío, no error
+      // (mismo comportamiento que la subquery original: IN de un set vacío).
+      // includeInactive: true — esta es una lectura de auditoría (bitácora de
+      // accesos), no una resolución de identidad para autorizar/firmar. La
+      // subquery original no filtraba por `activo`, así que el historial de un
+      // profesional dado de baja seguía siendo consultable por ADM/DIR; el
+      // resolver por defecto sí filtra `activo = true` y rompería ese caso.
+      const personal = await resolvePersonalSalud(ctx.prisma, targetUserId, {
+        includeInactive: true,
+      });
+      if (!personal) {
+        return { items: [], total: 0 };
+      }
+
       // Filtra por personal_id (los accesos del personal vinculado a targetUserId)
-      const conditions: string[] = [
-        "b.personal_id IN (SELECT id FROM ece.personal_salud WHERE his_user_id = $1::uuid)",
-      ];
-      const params: unknown[] = [targetUserId];
+      const conditions: string[] = ["b.personal_id = $1::uuid"];
+      const params: unknown[] = [personal.id];
       let idx = 2;
 
       if (input.dateFrom) {

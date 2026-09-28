@@ -45,8 +45,8 @@
  *   - `findPersonalSaludPorAuthUser` sigue privilegiado (`ctx.prisma`
  *     directo): es el bootstrap que resuelve `personal.id`
  *     (`ece.personal_salud.id`), necesario ANTES de poder abrir el contexto;
- *     solo filtra por `his_user_id = ctx.user.id` (valor de sesión, no
- *     input del cliente) — sin fuga cross-tenant posible.
+ *     solo filtra por el usuario vinculado = ctx.user.id (valor de sesión,
+ *     no input del cliente) — sin fuga cross-tenant posible.
  *   - `findFirmaElectronica`/`verificarPin` (PIN) se QUEDAN privilegiados a
  *     propósito: la policy `firma_self_only` de `ece.firma_electronica`
  *     exige `personal_id = current_setting('app.ece_personal_id')`, y ese
@@ -213,7 +213,7 @@ async function findFirmaElectronica(
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup del usuario a ece.personal_salud.
 async function findPersonalSaludPorAuthUser(
   prisma: RawClient,
   hisUserId: string,

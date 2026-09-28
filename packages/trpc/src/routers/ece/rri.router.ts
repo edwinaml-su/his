@@ -47,7 +47,7 @@
  *                              solicitado_por, respondido_por,
  *                              registrado_en (DEFAULT now()), instancia_id
  *   ece.documento_instancia  — instancia de flujo vinculada
- *   ece.personal_salud       — mapeo his_user_id → personal ECE id
+ *   ece.personal_salud       — mapeo HIS User → personal ECE id
  *   ece.firma_electronica    — credencial PIN (argon2id) del MC y del IC
  *
  * ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ async function findRri(tx: RawTx, id: string): Promise<RriRow | null> {
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup HIS User → ece.personal_salud.
 async function findPersonal(tx: RawTx, hisUserId: string): Promise<PersonalRow | null> {
   return resolvePersonalSalud(tx, hisUserId);
 }

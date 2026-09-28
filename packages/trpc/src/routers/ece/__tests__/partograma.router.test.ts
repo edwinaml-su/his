@@ -22,8 +22,10 @@
  *   - Evento ece.partograma.alerta emitido en zona_accion.
  */
 import { describe, it, expect } from "vitest";
+import { mockDeep } from "vitest-mock-extended";
+import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { calcularAlertaOms } from "../partograma.router";
+import { calcularAlertaOms, ecePartogramaRouter } from "../partograma.router";
 
 // ─── Schemas inline (evitan symlink @his/contracts en worktree) ───────────────
 
@@ -148,5 +150,46 @@ describe("detectarAlertasOMS lógica agregada", () => {
 
   it("ALERTA_OMS enum contiene los 3 valores OMS esperados", () => {
     expect(ALERTA_OMS).toEqual(["normal", "zona_alerta", "zona_accion"]);
+  });
+});
+
+// ─── buildEceCtx (R03 endurecimiento) ─────────────────────────────────────────
+// R03 stage 2 migró buildEceCtx de un SELECT manual sin filtro `activo` a
+// requirePersonalSalud (que sí filtra `activo = true`). Un profesional
+// inactivo que antes podía registrar partograma ahora recibe
+// PRECONDITION_FAILED — mismo endurecimiento documentado para who-checklist.
+
+function buildCtx(roleCodes: string[] = ["PHYSICIAN"]) {
+  const prisma = mockDeep<PrismaClient>();
+  prisma.$transaction.mockImplementation(
+    async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+  );
+  prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+
+  return {
+    prisma,
+    user: { id: "11111111-1111-1111-1111-111111111111", email: "md@test.com", fullName: "Médico Test" },
+    tenant: {
+      organizationId: "22222222-2222-2222-2222-222222222222",
+      establishmentId: "33333333-3333-3333-3333-333333333333",
+      roleCodes,
+    },
+    portalAccount: null,
+  };
+}
+
+describe("ecePartogramaRouter — buildEceCtx (R03)", () => {
+  it("PRECONDITION_FAILED si el usuario no tiene personal_salud activo vinculado", async () => {
+    const ctx = buildCtx(["PHYSICIAN"]);
+    ctx.prisma.$queryRaw.mockResolvedValueOnce([] as never); // resolvePersonalSalud -> null
+
+    const caller = ecePartogramaRouter.createCaller(ctx as never);
+
+    await expect(
+      caller.list({ docObstetricoId: "44444444-4444-4444-4444-444444444444" }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      cause: { code: "ECE_PERSONAL_SALUD_NOT_FOUND" },
+    });
   });
 });

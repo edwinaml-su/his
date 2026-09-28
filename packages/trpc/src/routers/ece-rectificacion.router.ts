@@ -167,7 +167,7 @@ async function loadFirmaDir(
   userId: string,
 ): Promise<FirmaRow> {
   // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  // en vez de reimplementar el lookup del usuario a ece.personal_salud.
   const personal = await requirePersonalSalud(prisma, userId);
 
   const firmas = await (
@@ -407,7 +407,7 @@ export const eceRectificacionRouter = router({
 
       // Resolver personal_salud del aprobador para insertar en ece.rectificacion.
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const aprobador = await resolvePersonalSalud(ctx.prisma, ctx.user.id);
       const personalId = aprobador?.id ?? null;
 

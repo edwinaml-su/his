@@ -67,6 +67,7 @@ import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
 // emitDomainEvent: mismo import que episodio.router.ts (patrón establecido)
 import { emitDomainEvent } from "@his/database";
+import { requirePersonalSalud, resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ─── Schemas Zod (inline — patrón de todos los routers ECE) ──────────────────
 // Los tipos canónicos viven en @his/contracts/src/schemas/ece-episodio-hospitalario.ts
@@ -541,6 +542,18 @@ export const eceEpisodioHospitalarioRouter = router({
         });
       }
 
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // — se resuelve UNA vez y se reutiliza abajo para episodio_estado_log
+      // (mismo ece.personalId, misma tx). Antes el JOIN de personal_salud vivía
+      // fusionado dentro del INSERT...SELECT de documento_instancia: si no
+      // había fila, el INNER JOIN devolvía 0 filas y el caller veía el mensaje
+      // genérico "Tipo documento EPICRISIS no configurado" aun cuando la causa
+      // real era la falta de personal_salud — requirePersonalSalud da el
+      // diagnóstico correcto en ese caso.
+      const personal = await requirePersonalSalud(tx, ece.personalId, {
+        action: "iniciar el alta médica",
+      });
+
       // 2. Crear borrador de epicrisis (instancia-first: instancia_id es NOT NULL).
       // Paso 2a: crear documento_instancia EPICRISIS en borrador.
       const tipoEgreso = input.motivoAlta === "defuncion" ? "fallecido" : "vivo";
@@ -557,11 +570,10 @@ export const eceEpisodioHospitalarioRouter = router({
           ${input.episodioId}::uuid,
           ea.paciente_id,
           fe.id,
-          ps.id
+          ${personal.id}::uuid
         FROM ece.tipo_documento td
         JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
         JOIN ece.episodio_atencion ea ON ea.id = ${input.episodioId}::uuid
-        JOIN ece.personal_salud ps ON ps.his_user_id = ${ece.personalId}::uuid AND ps.activo = true
         WHERE td.codigo = 'EPICRISIS' AND td.activo = true
         LIMIT 1
         RETURNING id::text
@@ -627,7 +639,7 @@ export const eceEpisodioHospitalarioRouter = router({
           ${input.episodioId}::uuid,
           'en_curso',
           'en_curso',
-          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
+          ${personal.id}::uuid,
           ${motivoAlta}
         )
       `;
@@ -745,6 +757,11 @@ export const eceEpisodioHospitalarioRouter = router({
       `;
 
       // 4. Registrar log de transición (columnas reales: estado_previo, motivo).
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts).
+      // cambiado_por es nullable (ON DELETE SET NULL) — se usa resolvePersonalSalud
+      // (no requirePersonalSalud) para preservar el comportamiento previo, que
+      // insertaba NULL en vez de bloquear la confirmación de alta.
+      const cambiadoPor = await resolvePersonalSalud(tx, ece.personalId);
       await tx.$executeRaw`
         INSERT INTO ece.episodio_estado_log
           (episodio_id, estado_previo, estado_nuevo, cambiado_por, motivo)
@@ -752,7 +769,7 @@ export const eceEpisodioHospitalarioRouter = router({
           ${input.episodioId}::uuid,
           'en_curso',
           'cerrado',
-          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
+          ${cambiadoPor?.id ?? null}::uuid,
           'Alta confirmada'
         )
       `;

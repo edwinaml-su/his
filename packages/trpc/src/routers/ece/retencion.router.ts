@@ -22,6 +22,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withTenantContext } from "../../rls-context";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -316,11 +317,18 @@ const eliminacionRouter = router({
         }
 
         // Obtener firma_electronica del usuario actual.
+        // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+        // en vez de fusionar el lookup de identidad dentro del JOIN de firma —
+        // separados, la falta de personal_salud da un diagnóstico específico en
+        // vez de "no tiene firma electrónica activa" genérico (mismo patrón que
+        // triaje-ece.router.ts, R03 stage 1).
+        const personal = await requirePersonalSalud(tx, userId, {
+          action: "firmar la eliminación supervisada",
+        });
         const firmaRows = await tx.$queryRaw<[{ id: string }]>`
           SELECT fe.id
           FROM ece.firma_electronica fe
-          JOIN ece.personal_salud ps ON ps.id = fe.personal_id
-          WHERE ps.his_user_id = ${userId}::uuid
+          WHERE fe.personal_id = ${personal.id}::uuid
             AND fe.revoked_at IS NULL
             AND (fe.locked_until IS NULL OR fe.locked_until < now())
           LIMIT 1

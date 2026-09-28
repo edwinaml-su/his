@@ -314,6 +314,35 @@ describe("retencionRouter — eliminacion.solicitar", () => {
   });
 });
 
+describe("retencionRouter — eliminacion.firmar", () => {
+  let ctx: Ctx;
+
+  beforeEach(() => {
+    ctx = buildCtx(["DIR"]);
+  });
+
+  it("17. firmar: PRECONDITION_FAILED si el usuario no tiene personal_salud activo vinculado (R03)", async () => {
+    // La solicitud existe y está en estado firmable.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: ELIM_ID, estado: "SOLICITADA", firma_dir1_id: null, firma_dir2_id: null },
+    ]);
+    // requirePersonalSalud -> resolvePersonalSalud sin fila.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    const caller = retencionRouter.createCaller(ctx as never);
+    await expect(
+      caller.eliminacion.firmar({
+        eliminacionId: ELIM_ID,
+        firmaPin: "1234",
+        numeroFirma: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      cause: { code: "ECE_PERSONAL_SALUD_NOT_FOUND" },
+    });
+  });
+});
+
 describe("retencionRouter — eliminacion.rechazar", () => {
   let ctx: Ctx;
 

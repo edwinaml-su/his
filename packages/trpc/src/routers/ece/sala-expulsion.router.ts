@@ -120,7 +120,7 @@ async function withEceContext<T>(
 }
 
 // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+// en vez de reimplementar el lookup HIS User → ece.personal_salud.
 async function findPersonalId(
   prisma: Pick<PrismaClient, "$queryRaw">,
   userId: string,
@@ -182,7 +182,7 @@ async function verifyPin(
   pin: string,
 ): Promise<{ firmaId: string; personalId: string }> {
   // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  // en vez de reimplementar el lookup HIS User → ece.personal_salud.
   const personal = await resolvePersonalSalud(prisma, hisUserId);
   if (!personal) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Sin perfil de personal_salud activo." });
@@ -405,8 +405,8 @@ export const eceSalaExpulsionRouter = router({
       // ('app.ece_personal_id')`; pasar `ctx.user.id` (espacio public."User")
       // como personalId del GUC nunca matchea esa policy — `verifyPin` (más
       // abajo) encontraría 0 filas en silencio para cualquier firma real. Solo
-      // filtra por `his_user_id = ctx.user.id` (valor de sesión, no del
-      // cliente) — sin fuga cross-tenant posible.
+      // filtra por el HIS User de sesión (`ctx.user.id`, no del cliente) —
+      // sin fuga cross-tenant posible.
       const personal = await resolvePersonalSalud(ctx.prisma, userId);
       if (!personal) {
         throw new TRPCError({
@@ -414,7 +414,7 @@ export const eceSalaExpulsionRouter = router({
           message:
             "Su usuario no tiene un registro de personal de salud (ece.personal_salud) " +
             "activo y vinculado para firmar. Pida a un ADMIN/DIR que lo vincule " +
-            "(his_user_id) en /profesionales-salud antes de continuar.",
+            "en /profesionales-salud antes de continuar.",
         });
       }
 

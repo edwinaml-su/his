@@ -293,7 +293,7 @@ export const epicrisisRouter = router({
 
       // Resolver personal_salud vinculado al usuario HIS.
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const personal = await resolvePersonalSalud(tx, eceCtx.personalId);
       if (!personal) {
         throw new TRPCError({
@@ -472,7 +472,7 @@ export const epicrisisRouter = router({
       }
 
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const personalJefe = await resolvePersonalSalud(tx, eceCtx.personalId);
       const jefeId = personalJefe?.id ?? eceCtx.personalId;
       const observacion = input.observacion ?? null;

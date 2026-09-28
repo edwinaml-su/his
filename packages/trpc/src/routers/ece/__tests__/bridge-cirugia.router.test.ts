@@ -164,6 +164,7 @@ describe("eceBridgeCirugiaRouter", () => {
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
       await expect(caller.programarCirugia(BASE_INPUT)).rejects.toMatchObject({
         code: "PRECONDITION_FAILED",
+        cause: { code: "ECE_PERSONAL_SALUD_NOT_FOUND" },
       });
     });
 
@@ -446,6 +447,16 @@ describe("eceBridgeCirugiaRouter", () => {
       ordenId: ORDEN_ID,
       motivo: "Paciente con fiebre preoperatoria",
     };
+
+    it("8a. PRECONDITION_FAILED si personal ECE no existe (R03)", async () => {
+      setupTx(prisma);
+      prisma.$queryRaw.mockResolvedValueOnce([]); // findPersonalSalud → vacío
+      const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
+      await expect(caller.cancelarPrograma(CANCEL_INPUT)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        cause: { code: "ECE_PERSONAL_SALUD_NOT_FOUND" },
+      });
+    });
 
     it("8. NOT_FOUND si orden quirúrgica no existe", async () => {
       // R1.2 — findOrdenQx se movió dentro de withWorkflowContext.

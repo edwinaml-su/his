@@ -44,6 +44,7 @@ import { withWorkflowContext } from "../../workflow/context";
 import { hayConflictoQuirofano } from "../../lib/quirofano-conflicto";
 import { capturarCargoReservaQuirofano } from "../../lib/quirofano-reserva-cargo";
 import { revertirCargo } from "../../lib/charge-capture";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // =============================================================================
 // Schemas Zod (inline — patrón establecido en bridge-admision.router.ts)
@@ -75,12 +76,6 @@ const cancelarProgramaInput = z.object({
 // =============================================================================
 
 type IdRow = { id: string };
-
-type PersonalSaludRow = {
-  id: string;
-  nombre_completo: string;
-  establecimiento_id: string;
-};
 
 type OrdenQxRow = {
   id: string;
@@ -139,33 +134,15 @@ async function forzarContextoOrgParaCargos(
   await tx.$executeRaw`SELECT public.set_tenant_context(${userId}::uuid, ${organizationId}::uuid, ${breakGlass})`;
 }
 
-async function findPersonalSaludPorUsuario(
-  prisma: RawClient,
-  hisUserId: string,
-): Promise<PersonalSaludRow | null> {
-  // R1.2 — justificado en `ctx.prisma` directo (BYPASSRLS) a propósito: esta
-  // lectura es el bootstrap que RESUELVE el `establecimiento_id` que luego se
-  // pasa a `withWorkflowContext` (no viene de `ctx.tenant.establishmentId`
-  // como en la mayoría de routers ECE) — no se puede exigir el contexto RLS
-  // de establecimiento antes de saber cuál es. El único filtro es
-  // `his_user_id = hisUserId` (valor server-side de la sesión autenticada,
-  // no input del cliente), así que solo puede devolver la fila del propio
-  // usuario — no hay fuga cross-tenant posible desde este SELECT.
-  // El profesional ECE se resuelve por his_user_id = User.id del HIS (ctx.user.id),
-  // igual que el router canónico orden-ingreso.router.ts. (auth_user_id es el id de
-  // Supabase auth, NO el de ctx.user — usarlo aquí devolvía null siempre.)
-  const rows = await (prisma.$queryRaw as (
-    tpl: TemplateStringsArray,
-    ...vals: unknown[]
-  ) => Promise<PersonalSaludRow[]>)`
-    SELECT id, nombre_completo, establecimiento_id
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
-}
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup. R1.2 — justificado en `ctx.prisma` directo
+// (BYPASSRLS) a propósito: esta lectura es el bootstrap que RESUELVE el
+// `establecimientoId` que luego se pasa a `withWorkflowContext` (no viene de
+// `ctx.tenant.establishmentId` como en la mayoría de routers ECE) — no se
+// puede exigir el contexto RLS de establecimiento antes de saber cuál es. El
+// resolver filtra por el HIS User de sesión (`ctx.user.id`, no input del
+// cliente), así que solo puede devolver la fila del propio usuario — no hay
+// fuga cross-tenant posible.
 
 async function findOrdenQx(
   prisma: RawClient,
@@ -205,15 +182,9 @@ export const eceBridgeCirugiaRouter = router({
     .input(programarCirugiaInput)
     .mutation(async ({ ctx, input }) => {
       // ── 1. Resolver personal ECE del usuario en sesión ──────────────────
-      const personal = await findPersonalSaludPorUsuario(ctx.prisma, ctx.user.id);
-      if (!personal) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            "El usuario no tiene registro en ece.personal_salud activo. " +
-            "Contacte al administrador del ECE.",
-        });
-      }
+      const personal = await requirePersonalSalud(ctx.prisma, ctx.user.id, {
+        action: "programar una cirugía",
+      });
 
       const fechaInicio = new Date(input.fechaProgramada);
       const fechaFin    = new Date(fechaInicio.getTime() + input.duracionEstimadaMin * 60_000);
@@ -226,7 +197,7 @@ export const eceBridgeCirugiaRouter = router({
       // postgres.<ref> con BYPASSRLS — defensa solo en JS, frágil.
       return withWorkflowContext(
         ctx.prisma,
-        { personalId: personal.id, establecimientoId: personal.establecimiento_id },
+        { personalId: personal.id, establecimientoId: personal.establecimientoId },
         async (tx) => {
         const rawTx = tx as unknown as RawClient;
         // C5 P0-4 — habilita RLS de public.PatientAccount* dentro de esta tx
@@ -318,7 +289,7 @@ export const eceBridgeCirugiaRouter = router({
           ) VALUES (
             ${ordInstanciaId}::uuid,
             ${input.pacienteId}::uuid,
-            ${personal.establecimiento_id}::uuid,
+            ${personal.establecimientoId}::uuid,
             ${motivoTexto},
             'cirugia',
             ${input.procedimientoCie10},
@@ -350,7 +321,7 @@ export const eceBridgeCirugiaRouter = router({
             creado_en
           ) VALUES (
             ${input.pacienteId}::uuid,
-            ${personal.establecimiento_id}::uuid,
+            ${personal.establecimientoId}::uuid,
             'hospitalario',
             'hospitalizacion',
             ${motivoTexto},
@@ -674,19 +645,15 @@ export const eceBridgeCirugiaRouter = router({
     .input(cancelarProgramaInput)
     .mutation(async ({ ctx, input }) => {
       // ── 1. Resolver personal ECE ─────────────────────────────────────────
-      const personal = await findPersonalSaludPorUsuario(ctx.prisma, ctx.user.id);
-      if (!personal) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "El usuario no tiene registro en ece.personal_salud activo.",
-        });
-      }
+      const personal = await requirePersonalSalud(ctx.prisma, ctx.user.id, {
+        action: "cancelar la programación de una cirugía",
+      });
 
       // ── 3. Transacción atómica cascade soft-delete con contexto ECE ──────
       // HE-02 (audit Stream E): withWorkflowContext aplica RLS al cascade.
       return withWorkflowContext(
         ctx.prisma,
-        { personalId: personal.id, establecimientoId: personal.establecimiento_id },
+        { personalId: personal.id, establecimientoId: personal.establecimientoId },
         async (tx) => {
         const rawTx = tx as unknown as RawClient;
         // C5 P0-4 — habilita RLS de public.PatientAccount* dentro de esta tx

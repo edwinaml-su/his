@@ -126,6 +126,9 @@ describe("firma.history", () => {
       },
     ];
 
+    // R03: history ahora resuelve personal_salud vía identity-resolver.ts
+    // (prisma.$queryRaw) antes de filtrar ece.bitacora_acceso.
+    prisma.$queryRaw.mockResolvedValueOnce(PERSONAL_ROW as never);
     (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce([{ total: BigInt(1) }]) // count
       .mockResolvedValueOnce(historyRows);            // data
@@ -142,6 +145,7 @@ describe("firma.history", () => {
     // Simula tenant con rol ADM en roleCodes
     const caller = makeFirmaCaller(prisma, { roleCodes: ["ADM"] });
 
+    prisma.$queryRaw.mockResolvedValueOnce(PERSONAL_ROW as never);
     (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce([{ total: BigInt(0) }])
       .mockResolvedValueOnce([]);
@@ -164,6 +168,7 @@ describe("firma.history", () => {
   it("[US.F2.7.5] filtra por rango de fechas", async () => {
     const caller = makeFirmaCaller(prisma, {});
 
+    prisma.$queryRaw.mockResolvedValueOnce(PERSONAL_ROW as never);
     (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce([{ total: BigInt(0) }])
       .mockResolvedValueOnce([]);

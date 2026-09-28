@@ -44,8 +44,16 @@ const INSTANCIA_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const EPISODIO_ID  = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const TRIAGE_ID    = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const FIRMA_ID     = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const PERSONAL_ID  = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const ORG_ID       = MOCK_TENANT.organizationId;
 const ESTAB_ID     = "00000000-0000-0000-0000-0000000000cc";
+
+// Fila cruda de ece.personal_salud — shape del resolver canónico (R03).
+const PERSONAL_SALUD_ROW = {
+  id: PERSONAL_ID,
+  nombre_completo: "Enf. Triaje",
+  establecimiento_id: ESTAB_ID,
+};
 
 const ECE_TENANT_ENF = {
   ...MOCK_TENANT,
@@ -174,7 +182,9 @@ describe("triajeEceRouter", () => {
     it("ENF puede firmar una hoja en estado borrador", async () => {
       // Hoja en borrador
       prisma.$queryRaw.mockResolvedValueOnce([HOJA_ROW_BORRADOR] as never);
-      // firma electrónica válida para el usuario
+      // R03: requirePersonalSalud (identity-resolver) del usuario en sesión
+      prisma.$queryRaw.mockResolvedValueOnce([PERSONAL_SALUD_ROW] as never);
+      // firma electrónica válida para el personal resuelto
       prisma.$queryRaw.mockResolvedValueOnce([{ id: FIRMA_ID }] as never);
       // emitDomainEvent usa tx.domainEvent.create (Prisma model)
       prisma.domainEvent.create.mockResolvedValue({ id: "event-abc" } as never);

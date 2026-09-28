@@ -80,7 +80,7 @@ async function verifyPinOrThrow(
   pin: string,
 ): Promise<{ firmaId: string }> {
   // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  // en vez de reimplementar el lookup HIS User → ece.personal_salud.
   const personal = await resolvePersonalSalud(tx, hisUserId);
   if (!personal) {
     throw new TRPCError({

@@ -52,7 +52,7 @@
  *   ece.tipo_documento          — resuelve CERT_DEF → tipo_documento_id + estado inicial
  *   ece.firma_electronica       — credencial de firma: pin_hash, failed_attempts,
  *                                 locked_until (lockout tras 3 intentos)
- *   ece.personal_salud          — mapeo his_user_id → personal ECE id
+ *   ece.personal_salud          — mapeo usuario HIS → personal ECE id (ver identity-resolver.ts)
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -251,24 +251,32 @@ async function verifyPin(firma: PersonalRow, pin: string): Promise<void> {
   }
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de fusionar el lookup de identidad con el JOIN a firma_electronica en
+// una sola query — separados, la falta de personal_salud da un diagnóstico
+// específico en vez del genérico "sin firma configurada" (mismo patrón que
+// triaje-ece.router.ts, R03 stage 1).
 async function resolvePersonal(
   prisma: { $queryRaw: <T>(q: TemplateStringsArray, ...v: unknown[]) => Promise<T> },
   userId: string,
 ): Promise<PersonalRow> {
-  const rows = await prisma.$queryRaw<PersonalRow[]>`
-    SELECT ps.id, fe.pin_hash, fe.failed_attempts, fe.locked_until, fe.revoked_at
-    FROM ece.personal_salud ps
-    JOIN ece.firma_electronica fe ON fe.personal_id = ps.id
-    WHERE ps.his_user_id = ${userId}::uuid AND ps.activo = true
+  const personal = await requirePersonalSalud(prisma, userId, {
+    action: "firmar/validar/certificar un certificado de defunción",
+  });
+
+  const rows = await prisma.$queryRaw<Array<Omit<PersonalRow, "id">>>`
+    SELECT fe.pin_hash, fe.failed_attempts, fe.locked_until, fe.revoked_at
+    FROM ece.firma_electronica fe
+    WHERE fe.personal_id = ${personal.id}::uuid
     LIMIT 1
   `;
   if (!rows[0]) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: "No se encontró personal ECE con firma electrónica configurada para su cuenta.",
+      message: "No se encontró firma electrónica configurada para su cuenta.",
     });
   }
-  return rows[0];
+  return { id: personal.id, ...rows[0] };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -453,7 +461,7 @@ export const eceCertDefRouter = router({
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       // 1. Resolver personal_salud vinculado al usuario HIS.
       // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
-      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      // en vez de reimplementar el lookup del usuario a ece.personal_salud.
       const medico = await requirePersonalSalud(tx, ece.personalId, {
         action: "crear un certificado de defunción",
       });

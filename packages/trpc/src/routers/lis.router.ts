@@ -2095,7 +2095,7 @@ export const lisRouter = router({
             //
             // `medico_tratante_id` es FK NOT NULL a `ece.personal_salud(id)`
             // (migración 114) — requiere que el prescriptor tenga perfil
-            // ECE vinculado (`his_user_id`). Si no lo tiene, se omite sin
+            // ECE vinculado (ver identity-resolver.ts). Si no lo tiene, se omite sin
             // bloquear la captura del resultado, que ya quedó persistida
             // arriba: `lab.criticalValue` sigue notificando igual. Ver R03
             // (`packages/trpc/src/lib/identity-resolver.ts`) — mientras
