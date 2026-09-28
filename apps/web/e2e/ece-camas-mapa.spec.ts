@@ -1,20 +1,23 @@
 /**
  * E2E — ECE Mapa de Camas.
  *
- * Smoke tests del flujo principal:
- *   1. La página carga con encabezado correcto.
- *   2. El selector de servicio está presente y funcional.
- *   3. El sidebar contiene "Mapa de Camas" bajo "ECE — Hospitalario".
- *   4. Las métricas se renderizan en la zona de estado.
- *   5. El grid de camas es navegable por teclado (WCAG 2.2 AA).
- *   6. Click en cama libre abre modal "Asignar paciente".
- *   7. El modal de asignación tiene los controles accesibles requeridos.
+ * `/ece/camas` fue consolidada a `/beds` (next.config.mjs, redirect 301,
+ * "Remediación auditoría 2026-09-18: /ece/camas duplicaba /beds... Mismo
+ * precedente que /ece/triaje (PR #101)"). Este spec quedó desactualizado
+ * apuntando a la ruta legacy y a un shape de UI (selector de servicio por
+ * combobox, grid con role=grid, modal "Asignar paciente" con campo "id
+ * episodio hospitalario") que NO existe en `/beds` (confirmado: cero
+ * ocurrencias de "métricas del servicio"/"mapa de camas del servicio"/
+ * "Asignar paciente" en todo `apps/web/src/app`, 2026-09-27). Los 100%
+ * de los 7 tests originales fallaban en la corrida real contra auth/DB
+ * reales (baseline @QA 2026-09-27).
  *
- * Nota: el flujo completo de asignación a BD requiere seed de camas con
- * ward real en Supabase. Los tests 6-7 validan UI/UX; la mutación tRPC
- * se cubre en los unit tests del router.
- *
- * Playwright config: fullyParallel=false, workers=1, locale=es-SV.
+ * Test 1 se reescribe para cubrir el REDIRECT en sí (sin cobertura previa).
+ * Tests 2-7 quedan `test.fixme()`: no hay candidato de UI real al cual
+ * apuntarlos sin adivinar — decisión de producto pendiente (@PO): ¿el
+ * grid por servicio + modal de asignación de `/ece/camas` se re-implementa
+ * en `/beds`, o la funcionalidad rica queda intencionalmente reducida al
+ * listado simple que ya cubre `beds-ece-integration.spec.ts`?
  */
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
@@ -27,119 +30,57 @@ test.describe("ECE — Mapa de Camas", () => {
     await page.goto(MAPA_URL);
   });
 
-  // 1 — Página carga
-  test("renderiza encabezado 'Mapa de Camas'", async ({ page }) => {
-    await expect(page).toHaveURL(/\/ece\/camas/);
+  // 1 — Redirect 301 a /beds (consolidación 2026-09-18) + encabezado real.
+  test("/ece/camas redirige a /beds y renderiza el mapa consolidado", async ({ page }) => {
+    await expect(page).toHaveURL(/\/beds/);
     await expect(
       page.getByRole("heading", { name: /mapa de camas/i, level: 1 }),
     ).toBeVisible();
   });
 
-  // 2 — Selector de servicio
-  test("selector de servicio está visible y tiene opciones", async ({ page }) => {
-    const selector = page.getByRole("combobox", { name: /servicio/i });
-    await expect(selector).toBeVisible();
-
-    // Abrir el select y verificar que hay al menos una opción
-    await selector.click();
-    const opciones = page.getByRole("option");
-    await expect(opciones.first()).toBeVisible();
-    // Cerrar con Escape
-    await page.keyboard.press("Escape");
+  // 2-7 — UI legacy de /ece/camas (selector de servicio, grid role=grid,
+  // modal "Asignar paciente") sin equivalente confirmado en /beds tras la
+  // consolidación. Ver comentario de cabecera — reportado a @PO, no
+  // adivinado.
+  test("selector de servicio está visible y tiene opciones", async () => {
+    test.fixme(
+      true,
+      "Combobox 'servicio' no existe en /beds — feature del /ece/camas legacy, sin candidato post-consolidación (ver cabecera).",
+    );
   });
 
-  // 3 — Sidebar contiene el item
-  test("sidebar contiene 'Mapa de Camas' bajo 'ECE — Hospitalario'", async ({ page }) => {
-    const nav = page.getByRole("navigation", { name: /principal/i });
-    await expect(nav).toBeVisible();
-    const link = nav.getByRole("link", { name: /mapa de camas/i });
-    await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute("href", MAPA_URL);
+  test("sidebar contiene 'Mapa de Camas' bajo 'ECE — Hospitalario'", async () => {
+    test.fixme(
+      true,
+      "Además del gap de UI: la aserción usaba getByRole('navigation', {name:/principal/i}) — el sidebar real (@his/ui Sidebar) usa role=menu/menuitem, nunca expone un landmark 'navigation' (ver hallazgo transversal en el reporte @QA 2026-09-27).",
+    );
   });
 
-  // 4 — Métricas presentes
-  test("muestra zona de métricas con badge 'Total'", async ({ page }) => {
-    // role=status con aria-label="Métricas del servicio"
-    const metricasZone = page.getByRole("status", { name: /métricas del servicio/i });
-    await expect(metricasZone).toBeVisible({ timeout: 10_000 });
-    // Al menos el badge "Total" debe estar visible
-    await expect(metricasZone.getByText(/total/i)).toBeVisible();
+  test("muestra zona de métricas con badge 'Total'", async () => {
+    test.fixme(
+      true,
+      "role=status \"Métricas del servicio\" no existe en /beds — sin candidato post-consolidación (ver cabecera).",
+    );
   });
 
-  // 5 — Grid accesible por teclado
-  test("grid de camas tiene role=grid y celdas enfocables por teclado", async ({ page }) => {
-    const grid = page.getByRole("grid", { name: /mapa de camas del servicio/i });
-    // Puede estar en estado loading (skeleton) o con datos
-    await expect(grid).toBeVisible({ timeout: 10_000 });
-
-    // Si hay celdas (no solo esqueletos), la primera debe ser focusable
-    const primeracelda = grid.getByRole("gridcell").first();
-    const primerBoton = primeracelda.getByRole("button").first();
-    if (await primerBoton.isVisible()) {
-      await primerBoton.focus();
-      await expect(primerBoton).toBeFocused();
-    }
+  test("grid de camas tiene role=grid y celdas enfocables por teclado", async () => {
+    test.fixme(
+      true,
+      "role=grid \"Mapa de camas del servicio\" no existe en /beds — sin candidato post-consolidación (ver cabecera).",
+    );
   });
 
-  // 6 — Click en cama libre abre modal asignar
-  test("click en cama libre abre modal 'Asignar paciente'", async ({ page }) => {
-    // Esperar grid con datos
-    const grid = page.getByRole("grid", { name: /mapa de camas del servicio/i });
-    await expect(grid).toBeVisible({ timeout: 10_000 });
-
-    // Buscar una celda con aria-label que contenga "Libre"
-    const camaLibre = grid
-      .getByRole("button")
-      .filter({ hasText: /libre/i })
-      .first();
-
-    // Si no hay camas libres en el seed, solo verificamos que el grid existe
-    if (!(await camaLibre.isVisible())) {
-      test.skip();
-      return;
-    }
-
-    await camaLibre.click();
-
-    // Modal debe abrirse
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    await expect(
-      dialog.getByRole("heading", { name: /asignar paciente/i }),
-    ).toBeVisible();
+  test("click en cama libre abre modal 'Asignar paciente'", async () => {
+    test.fixme(
+      true,
+      "Modal 'Asignar paciente' (con grid por servicio) no existe en /beds — sin candidato post-consolidación (ver cabecera). beds-ece-integration.spec.ts sí cubre un botón de asignación simple.",
+    );
   });
 
-  // 7 — Modal de asignación tiene controles accesibles
-  test("modal 'Asignar paciente' tiene campo episodio con label y botón submit", async ({
-    page,
-  }) => {
-    const grid = page.getByRole("grid", { name: /mapa de camas del servicio/i });
-    await expect(grid).toBeVisible({ timeout: 10_000 });
-
-    const camaLibre = grid
-      .getByRole("button")
-      .filter({ hasText: /libre/i })
-      .first();
-
-    if (!(await camaLibre.isVisible())) {
-      test.skip();
-      return;
-    }
-
-    await camaLibre.click();
-
-    const dialog = page.getByRole("dialog");
-    // Campo con label asociada
-    await expect(
-      dialog.getByLabel(/id episodio hospitalario/i),
-    ).toBeVisible();
-    // Botón submit
-    await expect(
-      dialog.getByRole("button", { name: /asignar/i }),
-    ).toBeVisible();
-    // Botón cancelar
-    await expect(
-      dialog.getByRole("button", { name: /cancelar/i }),
-    ).toBeVisible();
+  test("modal 'Asignar paciente' tiene campo episodio con label y botón submit", async () => {
+    test.fixme(
+      true,
+      "Mismo modal legacy que el test anterior — sin candidato post-consolidación (ver cabecera).",
+    );
   });
 });
