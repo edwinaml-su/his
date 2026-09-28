@@ -214,8 +214,26 @@ describe("epcisQueryRouter", () => {
     // withTenantContext abre una $transaction y, dentro, setea el GUC de
     // organización + demota el rol ANTES de correr la query raw.
     expect(transactionSpy).toHaveBeenCalledOnce();
-    expect(executeRawUnsafeSpy).toHaveBeenCalled();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((prisma as any).$queryRawUnsafe).toHaveBeenCalledOnce();
+    const queryRawUnsafeSpy = (prisma as any).$queryRawUnsafe;
+    expect(queryRawUnsafeSpy).toHaveBeenCalledOnce();
+
+    // El GUC de organización se setea con el org id de MOCK_TENANT...
+    const setContextCall = executeRawUnsafeSpy.mock.calls.find(([sql]) =>
+      String(sql).includes(MOCK_TENANT.organizationId),
+    );
+    expect(setContextCall).toBeDefined();
+    // ...y el rol se demota a `authenticated` (si no, la query corre BYPASSRLS).
+    const demoteCall = executeRawUnsafeSpy.mock.calls.find(([sql]) =>
+      String(sql).includes("SET LOCAL ROLE authenticated"),
+    );
+    expect(demoteCall).toBeDefined();
+
+    // Ambas SET LOCAL deben ocurrir ANTES de la query raw, no después.
+    const lastExecuteRawUnsafeOrder = Math.max(
+      ...executeRawUnsafeSpy.mock.invocationCallOrder,
+    );
+    const queryRawUnsafeOrder = queryRawUnsafeSpy.mock.invocationCallOrder[0];
+    expect(lastExecuteRawUnsafeOrder).toBeLessThan(queryRawUnsafeOrder);
   });
 });

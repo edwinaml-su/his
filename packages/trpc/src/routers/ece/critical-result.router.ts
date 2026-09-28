@@ -43,7 +43,7 @@
  *  pending         → requireRole(["MC","ESP","PHYSICIAN","DIR","ADMIN"])
  *  escalate        → requireRole(["DIR","ADMIN","MC","ESP"])   — supervisión o manual
  *
- * R02 (auditoria RLS externa, 2026-09-27) - YA CUMPLE, sin cambios en este
+ * R02 (auditoria RLS externa, 2026-09-27) - PARCIAL, sin cambios en este
  * lote. Las 4 procedures ya llaman `applyTenantContext(tx, ctx.tenant, ...)`
  * (la primitiva de bajo nivel, no el azucar `withTenantContext` — necesario
  * porque emit/confirmReadback/escalate comparten una sola `$transaction` con
@@ -51,10 +51,14 @@
  * de solo lectura). Este router aparecia en el listado inicial de "18
  * routers sin contexto" por un grep literal de `withTenantContext` que no
  * capturaba `applyTenantContext` — verificado que SI aplica el GUC de
- * organizacion + demote en las 4 procedures. La limitacion conocida de
- * `pending` (JOIN con `ece.personal_salud` sin `app.ece_establecimiento_id`
- * seteado) ya esta documentada en su propio comentario mas abajo y es
- * preexistente, no introducida por R02.
+ * organizacion en las 4 procedures, pero el demote a `authenticated` SOLO
+ * ocurre en `pending`: emit/confirmReadback/escalate pasan
+ * `demoteRole: false` (ver justificación en cada una, más abajo) y por lo
+ * tanto siguen corriendo con el rol BYPASSRLS de Supabase — es un residual
+ * abierto, no un gap cerrado. La limitacion conocida de `pending` (JOIN con
+ * `ece.personal_salud` sin `app.ece_establecimiento_id` seteado) ya esta
+ * documentada en su propio comentario mas abajo y es preexistente, no
+ * introducida por R02.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
