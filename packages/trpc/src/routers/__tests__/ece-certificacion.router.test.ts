@@ -194,6 +194,179 @@ describe("eceCertificacionRouter", () => {
       );
       await expect(caller.listCola({})).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
+
+    /**
+     * D5 (plan de remediación 2026-09) — el cursor debe ser coherente con el
+     * ORDER BY. Bug original: WHERE filtraba `di.id > $2` pero el ORDER BY era
+     * por `creado_en`/`actualizado_en` (columna sin relación con el id) — la
+     * página siguiente podía saltarse filas (id mayor, fecha anterior a la ya
+     * listada) o repetirlas (id menor, fecha posterior). Este test falla
+     * contra ese código: no había NINGÚN `di.id` en el ORDER BY, y el WHERE
+     * usaba solo `di.id`, nunca la columna de orden.
+     *
+     * `expectedColumn`/`expectedDirection` atan cada modo a su columna y
+     * sentido reales (hallazgo menor de revisión) — antes el test solo
+     * verificaba consistencia interna (ORDER BY = comparador = WHERE) sin
+     * comprobar que CADA modo usara lo que dice su label, así que pasaba
+     * igual si alguien intercambiaba las columnas/direcciones entre modos.
+     * `expectedColumn` es `creado_en` en ambos porque `ece.documento_instancia`
+     * no tiene `actualizado_en` en prod (ver comentario junto a `sortColumn`
+     * en el router) — lo que sí debe variar por modo es la dirección.
+     */
+    it.each([
+      {
+        incluirCertificados: false,
+        label: "creado_en ASC (cola pendiente)",
+        expectedColumn: "creado_en",
+        expectedDirection: "ASC",
+      },
+      {
+        incluirCertificados: true,
+        label: "creado_en DESC (histórico)",
+        expectedColumn: "creado_en",
+        expectedDirection: "DESC",
+      },
+    ])(
+      "usa un cursor compuesto (columna de orden + id) coherente con el ORDER BY — $label",
+      async ({ incluirCertificados, expectedColumn, expectedDirection }) => {
+        setupWorkflowContext();
+
+        // La validación de cursor (hallazgo menor de revisión) corre una
+        // query aparte ANTES de `baseQuery` — primer mock resuelve la
+        // existencia del cursor, segundo mock es el resultado de la cola.
+        prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: INSTANCIA_ID }]);
+        prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+        const caller = eceCertificacionRouter.createCaller(
+          makeCtx({ prisma, tenant: DIR_TENANT }),
+        );
+        await caller.listCola({ incluirCertificados, cursor: INSTANCIA_ID });
+
+        const call = prisma.$queryRawUnsafe.mock.calls[1]!;
+        const [sql, , cursorParam] = call as [string, ...unknown[]];
+
+        // El ORDER BY debe desempatar por `di.id` en el MISMO sentido que la
+        // columna de orden principal (si no, el desempate no es determinista).
+        const orderMatch = sql.match(
+          /ORDER BY di\.(creado_en|actualizado_en) (ASC|DESC), di\.id (ASC|DESC)/,
+        );
+        expect(orderMatch).not.toBeNull();
+        const [, sortColumn, sortDirection, idDirection] = orderMatch!;
+        expect(idDirection).toBe(sortDirection);
+
+        // Ata el modo a SU columna y dirección reales — no solo consistencia
+        // interna. Detecta un swap entre modos (p.ej. cola pendiente ordenada
+        // por DESC, o histórico apuntando de nuevo a una columna inexistente).
+        expect(sortColumn).toBe(expectedColumn);
+        expect(sortDirection).toBe(expectedDirection);
+
+        // El WHERE del cursor debe filtrar por la MISMA columna del ORDER BY
+        // + id (tupla), resolviendo la fecha real de la fila-cursor por PK —
+        // nunca solo por `di.id` (ese fue el bug: id sin relación con la
+        // fecha de orden).
+        const whereRegex = new RegExp(
+          `\\(di\\.${sortColumn}, di\\.id\\) (<|>) \\(\\s*SELECT ${sortColumn}, id FROM ece\\.documento_instancia WHERE id = \\$2::uuid\\s*\\)`,
+        );
+        const whereMatch = sql.match(whereRegex);
+        expect(whereMatch).not.toBeNull();
+
+        // Dirección del comparador coherente con el sentido del ORDER BY:
+        // ASC → siguiente página es "mayor"; DESC → siguiente página es "menor".
+        const comparator = whereMatch![1];
+        expect(comparator).toBe(sortDirection === "ASC" ? ">" : "<");
+
+        // El contrato del cursor no cambia: sigue siendo el id plano de la
+        // fila (el cliente web lo trata como opaco y lo reenvía tal cual).
+        expect(cursorParam).toBe(INSTANCIA_ID);
+      },
+    );
+
+    /**
+     * Hallazgo menor de revisión — el camino SIN cursor (primera página) no
+     * tenía cobertura: nada comprobaba que el WHERE no trajera la tupla de
+     * paginación, que el ORDER BY igual desempatara por `di.id`, ni que el
+     * LIMIT cayera en `$2` con exactamente 2 params (`[estadoFiltro, limit]`).
+     */
+    it("primera página (sin cursor): sin WHERE de tupla, ORDER BY con desempate por id, LIMIT $2 y 2 params", async () => {
+      setupWorkflowContext();
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      await caller.listCola({});
+
+      const call = prisma.$queryRawUnsafe.mock.calls[0]!;
+      const [sql, ...params] = call as [string, ...unknown[]];
+
+      expect(sql).not.toMatch(/\(di\.\w+, di\.id\)/);
+      expect(sql).toMatch(/ORDER BY di\.creado_en ASC, di\.id ASC/);
+      expect(sql).toMatch(/LIMIT \$2\s*$/);
+      expect(params).toHaveLength(2);
+    });
+
+    /**
+     * Hallazgo menor de revisión — si la fila del cursor no es visible bajo
+     * el contexto demotado o dejó de existir, la subquery de la tupla del
+     * WHERE da NULL y la comparación descarta todo en silencio (página vacía
+     * + hasMore:false, indistinguible de "cola terminada"). Se valida aparte
+     * y debe responder BAD_REQUEST en vez de una página vacía.
+     */
+    it("cursor inválido/no visible → BAD_REQUEST (no página vacía silenciosa)", async () => {
+      setupWorkflowContext();
+      // La query de validación de existencia del cursor no encuentra la fila.
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      await expect(
+        caller.listCola({ cursor: INSTANCIA_ID }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+      // No debe haber llegado a ejecutar `baseQuery`.
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Hallazgo menor de revisión — `ultimo_cambio_en` mide el tiempo en cola
+     * DIR (desde la última validación), no la fecha de creación del
+     * documento. Este test fija el contrato: `ultimoCambioEn` en la
+     * respuesta debe ser lo que trae `dih.ejecutado_en` (vía COALESCE en el
+     * SQL), no `creado_en`, cuando el documento fue validado.
+     */
+    it("ultimoCambioEn refleja la última validación, no la fecha de creación", async () => {
+      setupWorkflowContext();
+      const creadoEn = new Date("2026-05-10T08:00:00Z");
+      const ultimoCambio = new Date("2026-05-27T09:00:00Z");
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        {
+          id: INSTANCIA_ID,
+          tipo_documento_codigo: "EPICRISIS",
+          tipo_documento_nombre: "Epicrisis",
+          paciente_id: ECE_PACIENTE_ID,
+          public_patient_id: PUBLIC_PATIENT_ID,
+          estado_codigo: "validado",
+          estado_nombre: "Validado",
+          version: 1,
+          validado_por: PERSONAL_ID,
+          validado_por_nombre: "Dr. Juan Validador",
+          creado_en: creadoEn,
+          ultimo_cambio_en: ultimoCambio,
+        },
+      ]);
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { id: PUBLIC_PATIENT_ID, nombre: "Juana Perez" },
+      ]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      const result = await caller.listCola({});
+
+      expect(result.items[0]?.ultimoCambioEn).toBe(ultimoCambio.toISOString());
+      expect(result.items[0]?.ultimoCambioEn).not.toBe(result.items[0]?.creadoEn);
+    });
   });
 
   // -------------------------------------------------------------------------

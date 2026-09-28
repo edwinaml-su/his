@@ -361,7 +361,8 @@ export const eceCertificacionRouter = router({
    * Lista documentos en estado 'validado' pendientes de certificación DIR.
    * Ordenados por antigüedad (los más viejos primero — FIFO de cola).
    * Con `incluirCertificados: true` devuelve también los ya certificados
-   * (histórico, orden DESC por último cambio).
+   * (histórico, orden DESC por `creado_en` — no hay columna de "último
+   * cambio" en prod; ver comentario junto a `sortColumn` más abajo).
    */
   listCola: dirProcedure
     .input(listColaCertificacionInput)
@@ -405,6 +406,48 @@ export const eceCertificacionRouter = router({
       // Ninguno de los dos existía en la query original: `di.paciente_id`
       // apunta a `ece.paciente`, no a `public."Patient"`, y `ejecutado_por`
       // apunta a `ece.personal_salud`, no a `public."User"`.
+      //
+      // D5 (plan de remediación 2026-09) — keyset de paginación coherente con
+      // el ORDER BY. Antes, el cursor filtraba `di.id > $2` mientras el orden
+      // era por `creado_en`/`actualizado_en`: como el id no guarda relación
+      // con esas fechas, la página siguiente podía saltarse filas (id mayor
+      // pero fecha anterior a la ya listada) o repetirlas (id menor pero
+      // fecha posterior). El fix arma un cursor compuesto (columna de orden +
+      // id como desempate) resolviendo la fecha real de la fila-cursor con
+      // una subquery por PK — el cliente sigue mandando el mismo `id` plano
+      // de siempre, el contrato de `cursor` no cambia.
+      //
+      // Corrección post-revisión (hallazgo mayor) — `ece.documento_instancia`
+      // NO tiene columna `actualizado_en` en prod (verificado vía
+      // information_schema.columns sobre ejacvsgbewcerxtjtwto: solo trae id,
+      // tipo_documento_id, episodio_id, paciente_id, registro_id,
+      // estado_actual_id, version, estado_registro, creado_por, creado_en,
+      // confidencial), tampoco existe en sql/60_ece_05_motor.sql ni en
+      // schema.prisma — drift ya registrado en
+      // docs/uat/e2e-2026-06-10/inventario_drift_ece.md:68. El SELECT que la
+      // referenciaba (ver `ultimo_cambio_en` más abajo) hacía fallar
+      // `listCola` en AMBOS modos con 42703, incluso antes de este fix de
+      // keyset — no era algo introducido por el keyset, pero el keyset sí
+      // sumaba 3 referencias más (ORDER BY, tupla del WHERE y subquery del
+      // cursor en modo histórico). Agregar la columna requiere una migración
+      // SQL aplicada contra prod (fuera de alcance: esta sesión solo tiene
+      // lectura sobre la BD real) — mientras tanto, ambos modos ordenan por
+      // `creado_en` (inmutable, ya existe). Efecto colateral positivo: cierra
+      // también el hallazgo menor de drift de paginación por columna mutable
+      // (un `actualizado_en` que cambia entre páginas haría que la fila-cursor
+      // saltara al tope en la siguiente lectura).
+      //
+      // Corrección post-revisión (hallazgo menor) — `ultimo_cambio_en` (usado
+      // por el semáforo/badge de antigüedad de la cola DIR en la UI) es
+      // `COALESCE(dih.ejecutado_en, di.creado_en)`, NO un alias plano de
+      // `creado_en`: mide desde la última validación (`dih`, ya resuelto
+      // arriba por `ejecutado_en DESC`) y solo cae a `creado_en` si el
+      // documento nunca fue validado. El ORDER BY/cursor siguen en
+      // `creado_en` (inmutable) — no se ven afectados.
+      const sortColumn = "creado_en";
+      const sortDirection = input.incluirCertificados ? "DESC" : "ASC";
+      const cursorComparator = sortDirection === "ASC" ? ">" : "<";
+
       const baseQuery = `
         SELECT
           di.id,
@@ -418,13 +461,13 @@ export const eceCertificacionRouter = router({
           dih.ejecutado_por  AS validado_por,
           ps.nombre_completo AS validado_por_nombre,
           di.creado_en,
-          di.actualizado_en  AS ultimo_cambio_en
+          COALESCE(dih.ejecutado_en, di.creado_en) AS ultimo_cambio_en
         FROM ece.documento_instancia di
         JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
         JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
         JOIN ece.paciente       p  ON p.id = di.paciente_id
         LEFT JOIN LATERAL (
-          SELECT ejecutado_por
+          SELECT ejecutado_por, ejecutado_en
           FROM ece.documento_instancia_historial
           WHERE instancia_id = di.id
             AND accion = 'validar'
@@ -434,11 +477,12 @@ export const eceCertificacionRouter = router({
         LEFT JOIN ece.personal_salud ps ON ps.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
           AND di.estado_registro = 'vigente'
-          ${input.cursor ? "AND di.id > $2::uuid" : ""}
-        ORDER BY
-          ${input.incluirCertificados
-            ? "di.actualizado_en DESC"
-            : "di.creado_en ASC"}
+          ${input.cursor
+            ? `AND (di.${sortColumn}, di.id) ${cursorComparator} (
+                 SELECT ${sortColumn}, id FROM ece.documento_instancia WHERE id = $2::uuid
+               )`
+            : ""}
+        ORDER BY di.${sortColumn} ${sortDirection}, di.id ${sortDirection}
         LIMIT ${input.cursor ? "$3" : "$2"}
       `;
 
@@ -452,9 +496,32 @@ export const eceCertificacionRouter = router({
       // setea `app.ece_personal_id`/`app.ece_establecimiento_id` y demota a
       // `authenticated`: la policy RESTRICTIVE de confidencial_read aplica.
       const { rows, hasMore } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const rawRows = await (
-          tx as unknown as { $queryRawUnsafe: typeof ctx.prisma.$queryRawUnsafe }
-        ).$queryRawUnsafe<InstanciaColaRawRow[]>(baseQuery, ...params);
+        const rawTx = tx as unknown as { $queryRawUnsafe: typeof ctx.prisma.$queryRawUnsafe };
+
+        // Corrección post-revisión (hallazgo menor) — la subquery de
+        // `input.cursor` en `baseQuery` compara una tupla contra el resultado
+        // de esta misma fila; si el cursor ya no es visible bajo el contexto
+        // demotado (policy RESTRICTIVE confidencial_read) o dejó de existir,
+        // esa subquery da NULL y `(a, b) > (NULL, NULL)` es NULL, así que el
+        // WHERE descarta todo en silencio: página vacía + `hasMore: false`,
+        // sin error, como si la cola hubiese terminado. Se valida aparte,
+        // dentro de la misma tx (misma visibilidad RLS), para distinguir
+        // "cola vacía" de "cursor inválido" y forzar al cliente a reiniciar
+        // desde la primera página en vez de creer que llegó al final.
+        if (input.cursor) {
+          const cursorRow = await rawTx.$queryRawUnsafe<Array<{ id: string }>>(
+            `SELECT id FROM ece.documento_instancia WHERE id = $1::uuid`,
+            input.cursor,
+          );
+          if (cursorRow.length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Cursor inválido: la fila de referencia ya no existe o no es visible.",
+            });
+          }
+        }
+
+        const rawRows = await rawTx.$queryRawUnsafe<InstanciaColaRawRow[]>(baseQuery, ...params);
         return { rows: rawRows, hasMore: rawRows.length > input.limit };
       });
 
