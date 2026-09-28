@@ -60,7 +60,18 @@ export const PHYSICIAN_EQUIVALENT_ROLES = [
 /** Enfermería / triage asistencial. SOLO existe en la org piloto (1 org) — ver GAP reportado arriba. */
 export const NURSING_ROLES = ["NURSE", "TRIAGE_NURSE", "ENF_NRP"] as const;
 
-/** Especialidades quirúrgicas/obstétricas con catálogo propio (org piloto, 1 org). */
+/**
+ * Especialidades quirúrgicas/obstétricas con catálogo propio (org piloto, 1
+ * org). Deliberadamente FUERA de `CLINICAL_WRITE_ROLES`/`DISCHARGE_WRITE_ROLES`
+ * (quedan solo en `SURGERY_WRITE_ROLES`/`ACCOUNTS_OPEN_ROLES`): son
+ * especialidades de bloque quirúrgico, no personal de piso/hospitalización.
+ * Verificado en prod (2026-09-28, `UserOrganizationRole`/`Role` del proyecto
+ * `ejacvsgbewcerxtjtwto`): los 3 usuarios con ANEST/GO/PEDIA activos también
+ * tienen PHYSICIAN en las mismas organizaciones — hoy no pierden acceso a
+ * `CLINICAL_WRITE_ROLES`/`DISCHARGE_WRITE_ROLES` porque ya entran por
+ * `PHYSICIAN_EQUIVALENT_ROLES`. Si se siembra en el futuro un usuario
+ * ANEST/GO/PEDIA SIN PHYSICIAN, re-evaluar este set.
+ */
 export const SURGICAL_SPECIALTY_ROLES = ["ANEST", "GO", "PEDIA"] as const;
 
 /** Front-desk / admisión — ADMISSION_CLERK (org piloto) + equivalentes administrativos de las 21 orgs. */
@@ -156,10 +167,16 @@ export const ACCOUNTS_OPEN_ROLES = [
 /**
  * `/patients` es a la vez el buscador general de pacientes (MPI, enlazado
  * desde el dashboard como "Buscar paciente") y el worklist de cobro
- * (CC-0008) — por eso comparte el set amplio de `PHI_READ_ROLES` en vez de
- * restringirse a roles financieros.
+ * (CC-0008) — por eso extiende `PHI_READ_ROLES` con `FINANCE_ROLES` en vez
+ * de restringirse a uno de los dos. `PHI_READ_ROLES` solo no basta: deja a
+ * FACTURACION/GERENTE_FINANCIERO (ya escritores en `ACCOUNTS_OPEN_ROLES` /
+ * `ACCOUNTS_MANAGE_ROLES` y en `insurance.router.ts`) sin poder llegar a la
+ * cuenta desde `/patients` → `patient.search`/`patient.get` → `cuentas.tsx`.
+ * Deliberadamente NO se agrega `FINANCE_ROLES` a `PHI_READ_ROLES` mismo: ese
+ * set también gatea lecturas clínicas de piso (inpatient, triage, surgery,
+ * bed, encounter*) donde facturación no tiene motivo de acceso.
  */
-export const PATIENTS_WORKLIST_READ_ROLES = PHI_READ_ROLES;
+export const PATIENTS_WORKLIST_READ_ROLES = [...PHI_READ_ROLES, ...FINANCE_ROLES] as const;
 
 /** Cierre/gestión financiera de una cuenta de paciente ya abierta — financiero + admin, sin acceso operativo ancillary/front-desk. */
 export const ACCOUNTS_MANAGE_ROLES = [

@@ -1285,5 +1285,31 @@ describe("patientRouter", () => {
       );
       await expect(caller.search({ query: "Gomez" })).resolves.toBeDefined();
     });
+
+    // Hallazgo de revisión pre-PR (2026-09-28): `search`/`get` alimentan
+    // `SelectorCuenta` y la ficha `/patients/[id]` que facturación usa para
+    // llegar a `cuentas.tsx` (cerrar/liquidacion, ya permitidos por
+    // ACCOUNTS_MANAGE_ROLES) — FACTURACION no puede quedar bloqueada aquí.
+    it("search: FACTURACION (rol financiero de las 21 orgs) puede buscar pacientes", async () => {
+      setupTx();
+      prisma.patient.findMany.mockResolvedValue([] as never);
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      await expect(caller.search({ query: "Gomez" })).resolves.toBeDefined();
+    });
+
+    it("get: FACTURACION puede abrir la ficha del paciente para llegar a cuentas.tsx", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      // Basta con que pase el gate de rol y llegue a resolver el paciente
+      // (NOT_FOUND, no FORBIDDEN).
+      await expect(
+        caller.get({ id: "00000000-0000-0000-0000-000000000f20" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
   });
 });

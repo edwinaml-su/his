@@ -60,9 +60,15 @@ const accountsOpenProc = requireRole(ACCOUNTS_OPEN_ROLES);
 const accountsManageProc = requireRole(ACCOUNTS_MANAGE_ROLES);
 const worklistReadProc = requireRole(PATIENTS_WORKLIST_READ_ROLES);
 
-const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
-/** CC-0028b — mismo trío de roles que `coverageWriterProc` en insurance.router.ts. */
-const facturacionDualProc = requireRole(["ADMIN", "ACCOUNTANT", "BILLING"]);
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// (hallazgo pre-PR) — "ADMIN"/"ACCOUNTANT"/"BILLING" no existen como código
+// de rol en prod salvo ADMIN (solo 3 orgs, ver cabecera del archivo); dejaba
+// `altaAdministrativa`/`facturacionDual`/`regularizar` inoperantes para
+// FACTURACION en las 21 orgs multi-org. Reemplazado por `ACCOUNTS_MANAGE_ROLES`
+// (mismo set financiero que `cerrar`).
+const writerProc = requireRole(ACCOUNTS_MANAGE_ROLES);
+/** CC-0028b — mismo set financiero (`ACCOUNTS_MANAGE_ROLES`) que `cerrar`/`regularizar`. */
+const facturacionDualProc = requireRole(ACCOUNTS_MANAGE_ROLES);
 
 /** CC-0027 — documento de aceptación de deuda que formaliza la ruta CXC. */
 const documentoCxcInput = z.object({
@@ -835,10 +841,11 @@ export const patientAccountRouter = router({
   /**
    * docs/48 Ola 4 (C4-1) — Regulariza una cuenta PENDIENTE_REGULARIZAR:
    * asigna/cambia `tipoCuentaId` (resuelve "pagador sin definir", R1) y la
-   * pasa a ABIERTA. Rol administrativo (mismo par ADMIN/ACCOUNTANT que
-   * `tipoCuenta.router.ts`).
+   * pasa a ABIERTA. Rol financiero/administrativo — mismo set que `cerrar`
+   * (`ACCOUNTS_MANAGE_ROLES`; "ADMIN"/"ACCOUNTANT" no existían en prod, ver
+   * comentario de `writerProc` arriba).
    */
-  regularizar: requireRole(["ADMIN", "ACCOUNTANT"])
+  regularizar: requireRole(ACCOUNTS_MANAGE_ROLES)
     .input(z.object({ accountId: z.string().uuid(), tipoCuentaId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {

@@ -20,19 +20,23 @@ import {
   ADMISSION_WRITE_ROLES,
   CLINICAL_WRITE_ROLES,
   PATIENT_MDM_ROLES,
-  PHI_READ_ROLES,
+  PATIENTS_WORKLIST_READ_ROLES,
 } from "../rbac/operational-role-sets";
 
 // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
 // — 0 `requireRole` en la mayoría de procedures de este router (excepción:
 // `actualizarContactoEmergencia`, ya gateado). Lecturas de PHI (buscar/ver
-// paciente, catálogo de documentos, contexto de cuenta) → PHI_READ_ROLES.
+// paciente, catálogo de documentos, contexto de cuenta) → `PATIENTS_WORKLIST_READ_ROLES`
+// (PHI_READ_ROLES + FINANCE_ROLES: `search`/`get`/`findByDocument`/
+// `contextoCuenta` alimentan tanto el buscador MPI como `SelectorCuenta` y
+// la ficha de cuentas que usa facturación — ver comentario en
+// `operational-role-sets.ts`).
 // Registro/edición administrativa (create/update/addIdentifier/addAddress)
 // → ADMISSION_WRITE_ROLES. Alergia es dato clínico → CLINICAL_WRITE_ROLES.
 // Deduplicación/fusión de identidad (irreversible, toca PHI+historial
 // financiero de dos pacientes) → PATIENT_MDM_ROLES (gobierno de datos
 // maestros, no personal asistencial de piso).
-const readProc = requireRole(PHI_READ_ROLES);
+const readProc = requireRole(PATIENTS_WORKLIST_READ_ROLES);
 const registrationProc = requireRole(ADMISSION_WRITE_ROLES);
 const clinicalProc = requireRole(CLINICAL_WRITE_ROLES);
 const mdmProc = requireRole(PATIENT_MDM_ROLES);
@@ -702,8 +706,14 @@ export const patientRouter = router({
    * CC-0011 (item e) — upsert del contacto de emergencia único del paciente
    * (mockup avante2: modal "En caso de emergencia llamar a", editable por el
    * médico). Actualiza el contacto de prioridad 1 si existe; si no, lo crea.
+   *
+   * docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+   * (hallazgo pre-PR): "MC"/"MT" no existen en el catálogo de roles de prod
+   * (`Role.code`) — dead code que dejaba este gate funcionando solo por
+   * PHYSICIAN/NURSE/DIR, inexistentes en las 21 orgs multi-org. Reemplazado
+   * por `CLINICAL_WRITE_ROLES`, que cubre ambos catálogos.
    */
-  actualizarContactoEmergencia: requireRole(["PHYSICIAN", "NURSE", "MC", "MT", "DIR"])
+  actualizarContactoEmergencia: clinicalProc
     .input(patientEmergencyContactUpdateSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
