@@ -1888,6 +1888,16 @@ export const lisRouter = router({
               biologicalSex: { select: { code: true } },
             },
           });
+          // Hallazgo menor (revisión post-merge): esta edad es AL MOMENTO DE
+          // INGRESAR EL RESULTADO (`Date.now()`), no a la fecha de toma de la
+          // muestra. Con los tramos de edad ahora gobernando el flag (Wave 2
+          // estratificado), un resultado cargado tarde para una muestra
+          // tomada cerca de un límite de tramo (ej. pediatría 12→13) puede
+          // evaluarse contra el tramo equivocado. Calcular desde
+          // `LabSpecimen.collectedAt` requeriría resolver el specimen de la
+          // orden (no siempre es `input.specimenId`, que es opcional y puede
+          // no coincidir con el de la toma real) — queda registrado como
+          // deuda, no se resuelve en este cambio.
           const patientAgeYears: number | null = patient?.birthDate
             ? Math.floor(
                 (Date.now() - new Date(patient.birthDate).getTime()) /
@@ -1917,8 +1927,10 @@ export const lisRouter = router({
             // Regla de selección (documentada porque gobierna una decisión
             // clínica): se usan las filas de `LabReferenceRange` SOLO si al
             // menos una es aplicable al paciente — mismo sexo (o BOTH) y
-            // edad a la fecha de toma dentro de [ageMinYears, ageMaxYears]
-            // con límites INCLUSIVOS (`hasApplicableReferenceRange`,
+            // edad AL MOMENTO DE INGRESAR EL RESULTADO (patientAgeYears se
+            // calcula arriba con `Date.now()`, no con la fecha de toma de la
+            // muestra) dentro de [ageMinYears, ageMaxYears] con límites
+            // INCLUSIVOS (`hasApplicableReferenceRange`,
             // idéntico criterio que usa luego `evaluateLabResultFlag` para
             // rankear candidatos: sexo específico + bracket de edad > solo
             // uno de los dos > BOTH sin edad). Si ninguna fila aplica
@@ -2046,9 +2058,21 @@ export const lisRouter = router({
               // o fallback) en vez de reconstruir uno aparte desde
               // LabTest.refRangeLow/High — evitaba read-back (IPSG.2)
               // clínicamente incoherente con el flag emitido.
+              //
+              // Hallazgo menor #2 (revisión post-merge): NO usar `?? ` sobre
+              // `selectedRange?.minValue/maxValue` directamente — si
+              // selectedRange existe pero es un rango abierto (minValue o
+              // maxValue === null, ej. "< 5" sin cota inferior), `null ?? X`
+              // igual cae al fallback de LabTest y mezcla un extremo de la
+              // fila estratificada con el otro de LabTest. El extremo de
+              // LabTest solo debe usarse cuando NO hay selectedRange.
               referenceRange: {
-                low: selectedRange?.minValue ?? decimalToNullableNumber(item.test.refRangeLow),
-                high: selectedRange?.maxValue ?? decimalToNullableNumber(item.test.refRangeHigh),
+                low: selectedRange
+                  ? selectedRange.minValue
+                  : decimalToNullableNumber(item.test.refRangeLow),
+                high: selectedRange
+                  ? selectedRange.maxValue
+                  : decimalToNullableNumber(item.test.refRangeHigh),
               },
             };
             await emitDomainEvent(tx, {
@@ -2105,10 +2129,16 @@ export const lisRouter = router({
                   value: input.valueNumeric,
                   unit: input.valueUnit ?? item.test.unit ?? null,
                   // Mismo rango que el payload de `lab.criticalValue` arriba
-                  // (selectedRange) — ver comentario en ese bloque.
+                  // (selectedRange) — ver comentario en ese bloque, incluida
+                  // la nota sobre por qué NO se usa `?? ` directo sobre
+                  // selectedRange.minValue/maxValue.
                   referenceRange: {
-                    low: selectedRange?.minValue ?? decimalToNullableNumber(item.test.refRangeLow),
-                    high: selectedRange?.maxValue ?? decimalToNullableNumber(item.test.refRangeHigh),
+                    low: selectedRange
+                      ? selectedRange.minValue
+                      : decimalToNullableNumber(item.test.refRangeLow),
+                    high: selectedRange
+                      ? selectedRange.maxValue
+                      : decimalToNullableNumber(item.test.refRangeHigh),
                   },
                 },
                 // Ambos flags CRITICAL_LOW/CRITICAL_HIGH ya son el nivel más

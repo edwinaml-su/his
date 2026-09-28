@@ -1120,6 +1120,38 @@ describe("lisRouter", () => {
         expect(payload.referenceRange).toEqual({ low: 60, high: 110 });
       });
 
+      it("hallazgo menor #6 (revisión post-merge de la corrección anterior) — rango abierto (minValue=null) no mezcla el extremo faltante con LabTest", async () => {
+        // openHighRow no trae límite inferior (rango tipo "< 110", ej. un
+        // analito sin cota mínima clínica). Antes del fix, `selectedRange
+        // ?.minValue ?? decimalToNullableNumber(item.test.refRangeLow)`
+        // caía al fallback de LabTest (70) porque `null ?? X` ignora que
+        // selectedRange SÍ existe — el payload mezclaba `low` de LabTest con
+        // `high` de la fila estratificada, la misma incoherencia IPSG.2 que
+        // el propio commit dice cerrar. Con el fix, `low` debe quedar en
+        // `null` (el rango estratificado no define mínimo), no en 70.
+        const openHighRow = {
+          minValue: null,
+          maxValue: { toNumber: () => 110 },
+          ageMinYears: 0,
+          ageMaxYears: null,
+          sex: "BOTH",
+          criticalLow: null,
+          criticalHigh: { toNumber: () => 200 },
+        };
+        mockItem({ critical: false });
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([openHighRow] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 250, flag: "NORMAL" });
+
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.referenceRange).toEqual({ low: null, high: 110 });
+      });
+
       it("hallazgo menor #4 (revisión post-merge) — consulta LabReferenceRange con orderBy tenant-primero + id estable", async () => {
         // No hay forma de simular en un mock el orden físico de filas de
         // Postgres — se verifica que el router pida el orden correcto
