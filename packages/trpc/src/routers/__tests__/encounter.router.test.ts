@@ -551,4 +551,41 @@ describe("encounterRouter", () => {
       ).toBe(true);
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — `admit`/`list` corrían sobre `tenantProcedure` puro (sin rol).
+  describe("control de rol (CC — admisión)", () => {
+    it("admit: FORBIDDEN con rol sin permiso de admisión (BODEGA)", async () => {
+      const caller = encounterRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["BODEGA"] } }),
+      );
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "EMERGENCY",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("list: FORBIDDEN con rol sin permiso de lectura clínica (CONTRALOR_CORP)", async () => {
+      const caller = encounterRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["CONTRALOR_CORP"] } }),
+      );
+      await expect(
+        caller.list({ page: 1, pageSize: 20 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("list: MEDICO_AFILIADO (rol médico de las 21 orgs multi-org) puede listar encuentros", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      const caller = encounterRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(
+        caller.list({ page: 1, pageSize: 20 }),
+      ).resolves.toBeDefined();
+    });
+  });
 });

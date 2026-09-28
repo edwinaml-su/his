@@ -15,7 +15,31 @@ import {
   documentTypeEnum,
   type PatientMergeFieldKey,
 } from "@his/contracts";
-import { router, tenantProcedure, requireRole } from "../trpc";
+import { router, requireRole } from "../trpc";
+import {
+  ADMISSION_WRITE_ROLES,
+  CLINICAL_WRITE_ROLES,
+  PATIENT_MDM_ROLES,
+  PATIENTS_WORKLIST_READ_ROLES,
+} from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en la mayoría de procedures de este router (excepción:
+// `actualizarContactoEmergencia`, ya gateado). Lecturas de PHI (buscar/ver
+// paciente, catálogo de documentos, contexto de cuenta) → `PATIENTS_WORKLIST_READ_ROLES`
+// (PHI_READ_ROLES + FINANCE_ROLES: `search`/`get`/`findByDocument`/
+// `contextoCuenta` alimentan tanto el buscador MPI como `SelectorCuenta` y
+// la ficha de cuentas que usa facturación — ver comentario en
+// `operational-role-sets.ts`).
+// Registro/edición administrativa (create/update/addIdentifier/addAddress)
+// → ADMISSION_WRITE_ROLES. Alergia es dato clínico → CLINICAL_WRITE_ROLES.
+// Deduplicación/fusión de identidad (irreversible, toca PHI+historial
+// financiero de dos pacientes) → PATIENT_MDM_ROLES (gobierno de datos
+// maestros, no personal asistencial de piso).
+const readProc = requireRole(PATIENTS_WORKLIST_READ_ROLES);
+const registrationProc = requireRole(ADMISSION_WRITE_ROLES);
+const clinicalProc = requireRole(CLINICAL_WRITE_ROLES);
+const mdmProc = requireRole(PATIENT_MDM_ROLES);
 import { withTenantContext } from "../rls-context";
 import { withEceContext } from "../ece/rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
@@ -185,7 +209,7 @@ export const patientRouter = router({
    * Devuelve { id, displayName, expediente } o null si no existe.
    * Usado por el formulario de Orden de Ingreso para resolver el UUID del paciente.
    */
-  findByDocument: tenantProcedure
+  findByDocument: readProc
     .input(
       z.object({
         documentType: documentTypeEnum,
@@ -232,7 +256,7 @@ export const patientRouter = router({
       });
     }),
 
-  search: tenantProcedure.input(patientSearchSchema).query(async ({ ctx, input }) => {
+  search: readProc.input(patientSearchSchema).query(async ({ ctx, input }) => {
     const q = input.query.trim();
     // H1-06 — envuelto en withTenantContext: el rol Supabase original tiene
     // BYPASSRLS, así que sin demote a `authenticated` el filtro por
@@ -258,7 +282,7 @@ export const patientRouter = router({
     });
   }),
 
-  get: tenantProcedure
+  get: readProc
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       // H1-06 — RLS demote para evitar leer pacientes de otra org si el
@@ -388,7 +412,7 @@ export const patientRouter = router({
       };
     }),
 
-  create: tenantProcedure.input(patientCreateSchema).mutation(async ({ ctx, input }) => {
+  create: registrationProc.input(patientCreateSchema).mutation(async ({ ctx, input }) => {
     if (!ctx.tenant.establishmentId) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -547,7 +571,7 @@ export const patientRouter = router({
     });
   }),
 
-  update: tenantProcedure.input(patientUpdateSchema).mutation(async ({ ctx, input }) => {
+  update: registrationProc.input(patientUpdateSchema).mutation(async ({ ctx, input }) => {
     const { id, ...rest } = input;
     // CC-A (auditoría 2026-09-18, P1) — mismo criterio que `create`: si viene
     // documentType NO legacy, valida contra IdentifierType del país de la
@@ -595,7 +619,7 @@ export const patientRouter = router({
    * país de la organización; si el país no tiene catálogo sembrado (aún),
    * cae a la lista legacy SV para no dejar el select vacío.
    */
-  tiposDocumento: tenantProcedure.query(async ({ ctx }) => {
+  tiposDocumento: readProc.query(async ({ ctx }) => {
     const org = await ctx.prisma.organization.findUnique({
       where: { id: ctx.tenant.organizationId },
       select: { countryId: true },
@@ -621,7 +645,7 @@ export const patientRouter = router({
    * paciente ajeno adivinando/enumerando el UUID. Ahora corre dentro de
    * withTenantContext y valida pertenencia ANTES de escribir.
    */
-  addIdentifier: tenantProcedure
+  addIdentifier: registrationProc
     .input(z.object({ patientId: z.string().uuid(), data: patientIdentifierSchema }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -639,7 +663,7 @@ export const patientRouter = router({
     }),
 
   /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
-  addAllergy: tenantProcedure
+  addAllergy: clinicalProc
     .input(z.object({ patientId: z.string().uuid(), data: patientAllergySchema }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -661,7 +685,7 @@ export const patientRouter = router({
     }),
 
   /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
-  addAddress: tenantProcedure
+  addAddress: registrationProc
     .input(z.object({ patientId: z.string().uuid(), data: patientAddressSchema }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -682,8 +706,14 @@ export const patientRouter = router({
    * CC-0011 (item e) — upsert del contacto de emergencia único del paciente
    * (mockup avante2: modal "En caso de emergencia llamar a", editable por el
    * médico). Actualiza el contacto de prioridad 1 si existe; si no, lo crea.
+   *
+   * docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+   * (hallazgo pre-PR): "MC"/"MT" no existen en el catálogo de roles de prod
+   * (`Role.code`) — dead code que dejaba este gate funcionando solo por
+   * PHYSICIAN/NURSE/DIR, inexistentes en las 21 orgs multi-org. Reemplazado
+   * por `CLINICAL_WRITE_ROLES`, que cubre ambos catálogos.
    */
-  actualizarContactoEmergencia: requireRole(["PHYSICIAN", "NURSE", "MC", "MT", "DIR"])
+  actualizarContactoEmergencia: clinicalProc
     .input(patientEmergencyContactUpdateSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -732,7 +762,7 @@ export const patientRouter = router({
   // defensa: un bug futuro en el `where` habría fugado pacientes de otra
   // org sin que RLS lo detuviera. Ahora corre dentro de `withTenantContext`
   // (demote a rol `authenticated`) como defensa en profundidad.
-  findDuplicates: tenantProcedure
+  findDuplicates: mdmProc
     .input(findDuplicatesInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
@@ -863,7 +893,7 @@ export const patientRouter = router({
   // vía `ctx.prisma` (rol bypass). Ver también `patient-dedup.router.ts:519`
   // (ECE) — mismo bug latente, NO corregido en este PR (fuera de alcance,
   // reportado aparte).
-  mergePatients: tenantProcedure
+  mergePatients: mdmProc
     .input(mergePatientsInput)
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
@@ -987,7 +1017,7 @@ export const patientRouter = router({
   // CC-0007 — Contexto de cuenta de paciente para header pegajoso de HC.
   // Resuelve episodioId automáticamente (elimina input manual de UUID en UI).
   // ===========================================================================
-  contextoCuenta: tenantProcedure
+  contextoCuenta: readProc
     .input(z.object({ cuentaId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       // Bloque 1: cargar PatientAccount + datos base del paciente
@@ -1196,7 +1226,7 @@ export const patientRouter = router({
   // lo cual es peor que no tener unmerge. Se requiere snapshot completo en
   // PatientMerge.snapshotJson antes de habilitar de nuevo.
   // Referencia: H1-08 audit 2026-05-19, re-audit 2026-05-24 — ABIERTO.
-  unmerge: tenantProcedure
+  unmerge: mdmProc
     .input(unmergeInput)
     .mutation(async () => {
       throw new TRPCError({

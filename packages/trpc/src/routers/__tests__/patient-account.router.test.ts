@@ -1404,4 +1404,54 @@ describe("patientAccountRouter", () => {
       });
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — crear/agregarServicio/listarPorPaciente/listarWorklist/cerrar/
+  // liquidacion corrían sobre `tenantProcedure` puro.
+  describe("control de rol (CC — cuentas de paciente)", () => {
+    it("cerrar: FORBIDDEN para rol asistencial sin permiso financiero (NURSE)", async () => {
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.cerrar({ accountId: ACCOUNT_ID }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("listarPorPaciente: LAB_TECHNICIAN puede leer cuentas — `selector-cuenta.tsx` se usa desde lab/imaging/vitales", async () => {
+      setupTx();
+      prisma.patientAccount.findMany.mockResolvedValue([] as never);
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["LAB_TECHNICIAN"] } }),
+      );
+      await expect(
+        caller.listarPorPaciente({ patientId: "00000000-0000-0000-0000-000000000f10" }),
+      ).resolves.toBeDefined();
+    });
+
+    // Hallazgo de revisión pre-PR (2026-09-28): `listarWorklist` es el
+    // worklist de cobro (CC-0008) que `/patients` invoca — FACTURACION debe
+    // poder leerlo, no solo el personal asistencial de `PHI_READ_ROLES`.
+    it("listarWorklist: FACTURACION (rol financiero de las 21 orgs) puede leer el worklist de cobro", async () => {
+      setupTx();
+      prisma.$queryRawUnsafe.mockResolvedValue([] as never);
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      await expect(caller.listarWorklist({})).resolves.toBeDefined();
+    });
+
+    it("regularizar: FACTURACION puede regularizar una cuenta — antes solo ADMIN/ACCOUNTANT (ACCOUNTANT no existe en prod)", async () => {
+      const caller = patientAccountRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      // No mockeamos withTenantContext/tipoCuenta aquí: basta con que pase el
+      // gate de rol y llegue a resolver la cuenta (NOT_FOUND, no FORBIDDEN).
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      await expect(
+        caller.regularizar({ accountId: ACCOUNT_ID, tipoCuentaId: TIPO_CUENTA_ID }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
 });

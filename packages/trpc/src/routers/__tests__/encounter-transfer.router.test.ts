@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_TENANT } from "@his/test-utils";
 
 // docs/48 §5 C3-2 — capturarCargo ya tiene su propia suite (charge-capture.test.ts);
 // aquí solo importa que transferEncounter la invoque al crear el nuevo
@@ -465,6 +466,33 @@ describe("encounterTransferRouter", () => {
       });
       expect(args.take).toBe(25);
       expect(args.orderBy).toEqual({ occurredAt: "asc" }); // FIFO
+    });
+  });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole. `confirmReceipt` documentaba "cualquier usuario
+  // autenticado del tenant" como decisión deliberada (ownership de servicio
+  // vive en la UI) — sigue siendo así para el filtro por SERVICIO, pero ahora
+  // exige un piso de rol operativo.
+  describe("control de rol (CC — traslados)", () => {
+    it("confirmReceipt: FORBIDDEN para rol sin permiso operativo (CONTRALOR_CORP)", async () => {
+      const caller = encounterTransferRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["CONTRALOR_CORP"] } }),
+      );
+      await expect(
+        caller.confirmReceipt({
+          transferId: "00000000-0000-0000-0000-000000000abc",
+          note: "test",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("listPendingArrivals: JEFE_MEDICO_SEDE (rol médico de las 21 orgs) puede leer la bandeja", async () => {
+      prisma.encounterTransfer.findMany.mockResolvedValue([] as never);
+      const caller = encounterTransferRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["JEFE_MEDICO_SEDE"] } }),
+      );
+      await expect(caller.listPendingArrivals({ limit: 25 })).resolves.toBeDefined();
     });
   });
 });

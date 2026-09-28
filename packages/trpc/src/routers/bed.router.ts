@@ -11,7 +11,7 @@ import {
   bedUpdateSchema,
   bedSetActiveSchema,
 } from "@his/contracts";
-import { router, tenantProcedure, requireRole } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
@@ -20,8 +20,17 @@ import {
 import { assertGlnAsignable } from "../lib/gln-validation";
 import { capturarCargo } from "../lib/charge-capture";
 import { assertEgresoFisicoAutorizado } from "../lib/egreso-fisico-gate";
+import { ADMISSION_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
 
 const adminProc = requireRole(["ADMIN", "DIR"]);
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — list/getMap/updateStatus/findAvailable/assignToEncounter/release corrían
+// sobre `tenantProcedure` puro (a diferencia de adminList/create/update/
+// setActive de abajo, que ya tenían `adminProc`). Lecturas → PHI_READ_ROLES;
+// asignar/liberar/actualizar estado de cama es logística de admisión →
+// ADMISSION_WRITE_ROLES.
+const readProc = requireRole(PHI_READ_ROLES);
+const writeProc = requireRole(ADMISSION_WRITE_ROLES);
 
 function rethrowUniqueCode(err: unknown, code: string): never {
   if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -34,7 +43,7 @@ function rethrowUniqueCode(err: unknown, code: string): never {
 }
 
 export const bedRouter = router({
-  list: tenantProcedure.input(bedListSchema).query(async ({ ctx, input }) => {
+  list: readProc.input(bedListSchema).query(async ({ ctx, input }) => {
     // Nivel B — si el usuario pidió un servicio y NO está en su scope, 403.
     if (input.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
       throw new TRPCError({
@@ -69,7 +78,7 @@ export const bedRouter = router({
   }),
 
   /** Igual que list pero agrupado por servicio para el componente BedMap. */
-  getMap: tenantProcedure.query(async ({ ctx }) => {
+  getMap: readProc.query(async ({ ctx }) => {
     const services = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
       tx.serviceUnit.findMany({
         where: {
@@ -97,7 +106,7 @@ export const bedRouter = router({
     return services.filter((s) => s.beds.length > 0);
   }),
 
-  updateStatus: tenantProcedure
+  updateStatus: writeProc
     .input(bedUpdateStatusSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -127,7 +136,7 @@ export const bedRouter = router({
    * servicio. Devuelve datos suficientes para el selector del wizard
    * (`code` + `serviceUnit.name`). Excluye camas inactivas.
    */
-  findAvailable: tenantProcedure
+  findAvailable: readProc
     .input(bedFindAvailableSchema)
     .query(async ({ ctx, input }) => {
       // Nivel B — valida que el filtro pedido esté en el scope del usuario.
@@ -173,7 +182,7 @@ export const bedRouter = router({
    *     en alta concurrencia se debería usar `SELECT ... FOR UPDATE`
    *     vía `$queryRaw`; queda como TODO Sprint 2 si MINSAL lo exige.
    */
-  assignToEncounter: tenantProcedure
+  assignToEncounter: writeProc
     .input(bedAssignToEncounterSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -284,7 +293,7 @@ export const bedRouter = router({
    * se hace hoy vía el flujo de devoluciones/conciliación de cuentas
    * (patientAccount.router.ts / revertirCargo manual), no desde este router.
    */
-  release: tenantProcedure
+  release: writeProc
     .input(bedReleaseSchema)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {

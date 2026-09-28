@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
+import { MOCK_TENANT } from "@his/test-utils";
 
 // docs/48 §5 C3-2 — capturarCargo/revertirCargo ya tienen su propia suite
 // (charge-capture.test.ts); aquí solo importa que case.create/case.cancel las
@@ -728,6 +729,40 @@ describe("surgeryRouter", () => {
       expect(
         (args.data as Record<string, unknown>)["anesthesiaEndAt"],
       ).toBeUndefined();
+    });
+  });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en todo surgery.router.ts.
+  describe("control de rol (CC — quirófano)", () => {
+    it("case.signIn: FORBIDDEN con rol sin permiso quirúrgico (FACTURACION)", async () => {
+      const caller = surgeryRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["FACTURACION"] } }),
+      );
+      await expect(
+        caller.case.signIn({ id: u }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("operatingRoom.create: FORBIDDEN para rol asistencial sin permiso de configuración (NURSE)", async () => {
+      const caller = surgeryRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.operatingRoom.create({
+          establishmentId: u,
+          code: "OR-1",
+          name: "Quirófano 1",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("case.list: JEFE_MEDICO_SEDE (rol médico de las 21 orgs) puede leer casos", async () => {
+      prisma.surgeryCase.findMany.mockResolvedValue([] as never);
+      const caller = surgeryRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["JEFE_MEDICO_SEDE"] } }),
+      );
+      await expect(caller.case.list({})).resolves.toBeDefined();
     });
   });
 });

@@ -24,7 +24,12 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
 import { emitDomainEvent } from "@his/database";
-import { router, tenantProcedure, requireRole } from "../trpc";
+import { router, requireRole } from "../trpc";
+import {
+  ACCOUNTS_MANAGE_ROLES,
+  ACCOUNTS_OPEN_ROLES,
+  PATIENTS_WORKLIST_READ_ROLES,
+} from "../rbac/operational-role-sets";
 import { withTenantContext } from "../rls-context";
 import { nextCuenta } from "../lib/cuenta-numbering";
 import { calcularResumenRubros } from "../lib/resumen-rubros";
@@ -38,9 +43,32 @@ import {
 import { insertarFacturaConItems, type InvoiceItemParaInsertar } from "../lib/invoice-writer";
 
 const tipoServicioEnum = z.enum(["HOSPITALARIO", "NO_HOSPITALARIO"]);
-const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
-/** CC-0028b — mismo trío de roles que `coverageWriterProc` en insurance.router.ts. */
-const facturacionDualProc = requireRole(["ADMIN", "ACCOUNTANT", "BILLING"]);
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — crear/agregarServicio/listarPorPaciente/liquidacion/cerrar/listarWorklist
+// corrían sobre `tenantProcedure` puro. `ACCOUNTS_OPEN_ROLES` es
+// deliberadamente amplio: `selector-cuenta.tsx` (componente compartido) abre/
+// lista cuentas desde imaging, lab, respiratorio, signos vitales e historia
+// clínica — el personal que ordena esos servicios necesita crear/ver la
+// cuenta, no sólo facturación. `cerrar` sí queda en el set financiero
+// estrecho (`ACCOUNTS_MANAGE_ROLES`): cerrar una cuenta es una decisión
+// administrativa/financiera, no parte del flujo de órdenes clínicas.
+// `listarWorklist` alimenta `/patients` (buscador general de pacientes +
+// worklist de cobro, CC-0008) — usa el mismo set amplio de lectura de PHI
+// que el resto del HIS, no uno financiero estrecho, para no romper la
+// navegación básica de "buscar paciente" del personal asistencial.
+const accountsOpenProc = requireRole(ACCOUNTS_OPEN_ROLES);
+const accountsManageProc = requireRole(ACCOUNTS_MANAGE_ROLES);
+const worklistReadProc = requireRole(PATIENTS_WORKLIST_READ_ROLES);
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// (hallazgo pre-PR) — "ADMIN"/"ACCOUNTANT"/"BILLING" no existen como código
+// de rol en prod salvo ADMIN (solo 3 orgs, ver cabecera del archivo); dejaba
+// `altaAdministrativa`/`facturacionDual`/`regularizar` inoperantes para
+// FACTURACION en las 21 orgs multi-org. Reemplazado por `ACCOUNTS_MANAGE_ROLES`
+// (mismo set financiero que `cerrar`).
+const writerProc = requireRole(ACCOUNTS_MANAGE_ROLES);
+/** CC-0028b — mismo set financiero (`ACCOUNTS_MANAGE_ROLES`) que `cerrar`/`regularizar`. */
+const facturacionDualProc = requireRole(ACCOUNTS_MANAGE_ROLES);
 
 /** CC-0027 — documento de aceptación de deuda que formaliza la ruta CXC. */
 const documentoCxcInput = z.object({
@@ -480,7 +508,7 @@ export const patientAccountRouter = router({
    * tenant. `servicio` opcional crea el primer PatientAccountService en el
    * mismo paso (usado por el selector-cuenta inline).
    */
-  crear: tenantProcedure
+  crear: accountsOpenProc
     .input(
       z.object({
         patientId: z.string().uuid(),
@@ -544,7 +572,7 @@ export const patientAccountRouter = router({
   /**
    * Agrega un servicio a una cuenta existente.
    */
-  agregarServicio: tenantProcedure
+  agregarServicio: accountsOpenProc
     .input(
       z.object({
         accountId: z.string().uuid(),
@@ -570,7 +598,7 @@ export const patientAccountRouter = router({
   /**
    * Lista cuentas de un paciente con sus servicios y tipo de cuenta incluidos.
    */
-  listarPorPaciente: tenantProcedure
+  listarPorPaciente: accountsOpenProc
     .input(z.object({ patientId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -611,7 +639,7 @@ export const patientAccountRouter = router({
    * `PatientAccount`, que ni siquiera se joinea aquí) por eso, no porque a
    * `PatientAccount` le falte estado.
    */
-  listarWorklist: tenantProcedure
+  listarWorklist: worklistReadProc
     .input(
       z.object({
         vista: z.enum(["pendientes", "cerradas"]).default("pendientes"),
@@ -752,7 +780,7 @@ export const patientAccountRouter = router({
    * emite `cuenta.resumen_rubros` (agregado por centro de costo + cuenta
    * contable, `lib/resumen-rubros.ts`) al outbox, no-bloqueante (try/catch).
    */
-  cerrar: tenantProcedure
+  cerrar: accountsManageProc
     .input(z.object({ accountId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -813,10 +841,11 @@ export const patientAccountRouter = router({
   /**
    * docs/48 Ola 4 (C4-1) — Regulariza una cuenta PENDIENTE_REGULARIZAR:
    * asigna/cambia `tipoCuentaId` (resuelve "pagador sin definir", R1) y la
-   * pasa a ABIERTA. Rol administrativo (mismo par ADMIN/ACCOUNTANT que
-   * `tipoCuenta.router.ts`).
+   * pasa a ABIERTA. Rol financiero/administrativo — mismo set que `cerrar`
+   * (`ACCOUNTS_MANAGE_ROLES`; "ADMIN"/"ACCOUNTANT" no existían en prod, ver
+   * comentario de `writerProc` arriba).
    */
-  regularizar: requireRole(["ADMIN", "ACCOUNTANT"])
+  regularizar: requireRole(ACCOUNTS_MANAGE_ROLES)
     .input(z.object({ accountId: z.string().uuid(), tipoCuentaId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -860,7 +889,7 @@ export const patientAccountRouter = router({
    * `saldo` (ver `computeCoberturaEstimada`) — es la base para negociar con
    * la aseguradora, no un descuento automático.
    */
-  liquidacion: tenantProcedure
+  liquidacion: accountsOpenProc
     .input(z.object({ accountId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {

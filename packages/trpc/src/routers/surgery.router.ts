@@ -29,13 +29,23 @@ import {
   surgeryCaseAnesthesiaInput,
   surgeryCaseUpdateIntraopNotesInput,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import { revertirCargo } from "../lib/charge-capture";
 import { hayConflictoQuirofano } from "../lib/quirofano-conflicto";
 import { capturarCargoReservaQuirofano } from "../lib/quirofano-reserva-cargo";
 import { atribuirProduccionMedica } from "../lib/produccion-atribucion";
+import { CONFIG_ROLES, PHI_READ_ROLES, SURGERY_WRITE_ROLES } from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en todo `surgery.router.ts`. `operatingRoom.create` es
+// parametrización admin (alta de quirófano); el resto de escrituras son el
+// acto quirúrgico/checklist WHO en sí (cirujano/anestesiólogo/enfermería
+// circulante); las lecturas alimentan el tablero de quirófano.
+const readProc = requireRole(PHI_READ_ROLES);
+const writeProc = requireRole(SURGERY_WRITE_ROLES);
+const configProc = requireRole(CONFIG_ROLES);
 
 // ---------------------------------------------------------------------------
 // Router
@@ -43,7 +53,7 @@ import { atribuirProduccionMedica } from "../lib/produccion-atribucion";
 
 export const surgeryRouter = router({
   operatingRoom: router({
-    list: tenantProcedure
+    list: readProc
       .input(operatingRoomListInput)
       .query(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -61,7 +71,7 @@ export const surgeryRouter = router({
         );
       }),
 
-    create: tenantProcedure
+    create: configProc
       .input(operatingRoomCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -84,7 +94,7 @@ export const surgeryRouter = router({
   }),
 
   case: router({
-    list: tenantProcedure
+    list: readProc
       .input(surgeryCaseListInput)
       .query(async ({ ctx, input }) => {
         // Nivel B — SurgeryCase no tiene serviceUnitId propio; scope via el OR
@@ -131,7 +141,7 @@ export const surgeryRouter = router({
         );
       }),
 
-    get: tenantProcedure
+    get: readProc
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
         const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -147,7 +157,7 @@ export const surgeryRouter = router({
         return item;
       }),
 
-    create: tenantProcedure
+    create: writeProc
       .input(surgeryCaseCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -269,7 +279,7 @@ export const surgeryRouter = router({
     // El coordinador del quirófano debe confirmar la llegada con
     // `encounterTransfer.confirmReceipt` antes del Sign-In.
     // ------------------------------------------------------------------
-    signIn: tenantProcedure
+    signIn: writeProc
       .input(surgeryCaseSignInInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -336,7 +346,7 @@ export const surgeryRouter = router({
     // ------------------------------------------------------------------
     // WHO Surgical Safety Checklist — Time Out
     // ------------------------------------------------------------------
-    timeOut: tenantProcedure
+    timeOut: writeProc
       .input(surgeryCaseTimeOutInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -370,7 +380,7 @@ export const surgeryRouter = router({
     // Start surgery: SCHEDULED/CONFIRMED → IN_PROGRESS
     // Requires signInAt + timeOutAt (WHO checklist gates)
     // ------------------------------------------------------------------
-    start: tenantProcedure
+    start: writeProc
       .input(surgeryCaseStartInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -403,7 +413,7 @@ export const surgeryRouter = router({
     // ------------------------------------------------------------------
     // WHO Surgical Safety Checklist — Sign Out
     // ------------------------------------------------------------------
-    signOut: tenantProcedure
+    signOut: writeProc
       .input(surgeryCaseSignOutInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -436,7 +446,7 @@ export const surgeryRouter = router({
     // Transition to POST_OP: IN_PROGRESS → POST_OP
     // Requires signOutAt (WHO Sign Out gate)
     // ------------------------------------------------------------------
-    postOp: tenantProcedure
+    postOp: writeProc
       .input(surgeryCasePostOpInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -471,7 +481,7 @@ export const surgeryRouter = router({
     // ------------------------------------------------------------------
     // Complete: POST_OP → COMPLETED
     // ------------------------------------------------------------------
-    complete: tenantProcedure
+    complete: writeProc
       .input(surgeryCaseCompleteInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -503,7 +513,7 @@ export const surgeryRouter = router({
     // ------------------------------------------------------------------
     // Cancel: SCHEDULED / CONFIRMED / POSTPONED → CANCELLED
     // ------------------------------------------------------------------
-    cancel: tenantProcedure
+    cancel: writeProc
       .input(surgeryCaseCancelInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -557,7 +567,7 @@ export const surgeryRouter = router({
     // Postpone: SCHEDULED / CONFIRMED → POSTPONED (reschedule)
     // Re-runs OR conflict detection for the new timeslot.
     // ------------------------------------------------------------------
-    postpone: tenantProcedure
+    postpone: writeProc
       .input(surgeryCasePostponeInput)
       .mutation(async ({ ctx, input }) => {
         if (input.newScheduledEnd <= input.newScheduledStart) {
@@ -617,7 +627,7 @@ export const surgeryRouter = router({
     // Update intraop notes — append-only, only during IN_PROGRESS.
     // No state transition. Audit covered by SurgeryCase UPDATE trigger.
     // ------------------------------------------------------------------
-    updateIntraopNotes: tenantProcedure
+    updateIntraopNotes: writeProc
       .input(surgeryCaseUpdateIntraopNotesInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -659,7 +669,7 @@ export const surgeryRouter = router({
     // ------------------------------------------------------------------
     // Anesthesia tracking
     // ------------------------------------------------------------------
-    recordAnesthesia: tenantProcedure
+    recordAnesthesia: writeProc
       .input(surgeryCaseAnesthesiaInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {

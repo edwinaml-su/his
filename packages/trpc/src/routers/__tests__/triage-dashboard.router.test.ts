@@ -114,4 +114,26 @@ describe("triageDashboardRouter", () => {
       });
     });
   });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en este router.
+  describe("control de rol (CC — triage)", () => {
+    it("closeEvaluation: FORBIDDEN con rol sin permiso clínico (BODEGA)", async () => {
+      const caller = triageDashboardRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["BODEGA"] } }),
+      );
+      await expect(
+        caller.closeEvaluation({ triageEvaluationId: "00000000-0000-0000-0000-000000000091" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("queueWithTimers: ADMIN_CLINICO (admin clínico de las 21 orgs) puede leer la cola", async () => {
+      prisma.triageEvaluation.findMany.mockResolvedValue([] as never);
+      prisma.triageLevel.findMany.mockResolvedValue([] as never);
+      const caller = triageDashboardRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMIN_CLINICO"] } }),
+      );
+      await expect(caller.queueWithTimers()).resolves.toBeDefined();
+    });
+  });
 });

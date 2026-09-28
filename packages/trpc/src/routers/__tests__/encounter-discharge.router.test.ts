@@ -12,6 +12,7 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { encounterDischargeRouter } from "../encounter-discharge.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_TENANT } from "@his/test-utils";
 
 function fn<T>(returnValue: T) {
   return vi.fn().mockResolvedValue(returnValue);
@@ -207,6 +208,41 @@ describe("encounterDischargeRouter", () => {
           encounterId: "00000000-0000-0000-0000-000000000099",
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md
+  // §2 — 0 requireRole en este router. El alta médica es decisión clínica
+  // exclusiva del médico tratante (con respaldo de admin clínico).
+  describe("control de rol (CC — egreso)", () => {
+    it("dischargeEncounter: FORBIDDEN para NURSE (el alta médica no es decisión de enfermería)", async () => {
+      const caller = encounterDischargeRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.dischargeEncounter({
+          encounterId: "00000000-0000-0000-0000-000000000010",
+          dischargeType: "HOME",
+          primaryDiagnosisCode: "I50.9",
+          primaryDiagnosisDesc: "ICC",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("epicrisis: MEDICO_AFILIADO (rol médico de las 21 orgs) puede leer la epicrisis", async () => {
+      const encId = "00000000-0000-0000-0000-000000000e11";
+      prisma.encounter.findFirst = fn({
+        id: encId,
+        dischargedAt: new Date(),
+        patient: { id: "p1", firstName: "A", lastName: "B", mrn: "M1", birthDate: null },
+      }) as never;
+      prisma.auditLog.findFirst = fn(null) as never;
+      const caller = encounterDischargeRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MEDICO_AFILIADO"] } }),
+      );
+      await expect(
+        caller.epicrisis({ encounterId: encId }),
+      ).resolves.toBeDefined();
     });
   });
 });

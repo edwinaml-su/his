@@ -189,7 +189,7 @@ export const portalProcedure = t.procedure.use(({ ctx, next }) => {
  * BIT-IDÉNTICO al de antes de CC-0017. Ver
  * `packages/trpc/src/__tests__/rbac/effective-roles.test.ts`.
  */
-export function requireRole(roleCodes: string[]) {
+export function requireRole(roleCodes: readonly string[]) {
   return tenantProcedure.use(async ({ ctx, next }) => {
     const effectiveRoleCodes = await getEffectiveRoleCodes(ctx.prisma, ctx.tenant);
     const has = effectiveRoleCodes.some((r) => roleCodes.includes(r));

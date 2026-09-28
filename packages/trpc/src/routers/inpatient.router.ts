@@ -36,7 +36,7 @@ import {
   type VitalCriticalPayload,
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
-import { router, tenantProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
@@ -44,6 +44,24 @@ import {
 } from "../lib/service-unit-scope";
 import { capturarCargo } from "../lib/charge-capture";
 import { assertEgresoFisicoAutorizado } from "../lib/egreso-fisico-gate";
+import {
+  ADMISSION_WRITE_ROLES,
+  CLINICAL_WRITE_ROLES,
+  DISCHARGE_WRITE_ROLES,
+  PHI_READ_ROLES,
+} from "../rbac/operational-role-sets";
+
+// docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
+// — 0 `requireRole` en todo `inpatient.router.ts`. Lecturas → PHI_READ_ROLES.
+// Logística de admisión hospitalaria (decidir/asignar cama/recibir/cancelar)
+// → ADMISSION_WRITE_ROLES. Alta/transferencia definitiva (egreso físico) →
+// DISCHARGE_WRITE_ROLES (decisión médica). Vitales/kardex/plan de
+// cuidado/pase domiciliario → CLINICAL_WRITE_ROLES (registro asistencial de
+// piso).
+const readProc = requireRole(PHI_READ_ROLES);
+const admissionProc = requireRole(ADMISSION_WRITE_ROLES);
+const clinicalProc = requireRole(CLINICAL_WRITE_ROLES);
+const dischargeProc = requireRole(DISCHARGE_WRITE_ROLES);
 
 /**
  * Beta.15 — mapping del shape interno de `evaluateVitalAlerts`
@@ -83,7 +101,7 @@ function toPayloadAlert(
 
 export const inpatientRouter = router({
   admission: router({
-    list: tenantProcedure
+    list: readProc
       .input(inpatientAdmissionListInput)
       .query(async ({ ctx, input }) => {
         // Nivel B — InpatientAdmission no tiene serviceUnitId; scope via el
@@ -123,7 +141,7 @@ export const inpatientRouter = router({
         );
       }),
 
-    get: tenantProcedure
+    get: readProc
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
         const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -139,7 +157,7 @@ export const inpatientRouter = router({
         return item;
       }),
 
-    create: tenantProcedure
+    create: admissionProc
       .input(inpatientAdmissionCreateInput)
       .mutation(async ({ ctx, input }) => {
         // Crear admisión + (opcional) bed assignment en transacción atómica.
@@ -278,7 +296,7 @@ export const inpatientRouter = router({
      * Hito 1 — Decidir admisión. El médico indica el ingreso del paciente,
      * sin asignar cama todavía. status=ADMISSION_DECIDED.
      */
-    decidirAdmision: tenantProcedure
+    decidirAdmision: clinicalProc
       .input(inpatientDecidirAdmisionInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -328,7 +346,7 @@ export const inpatientRouter = router({
      * La cama debe estar FREE; pasa a estado lógico (no se cambia su `status`
      * a OCCUPIED hasta el Hito 3 — recepción física).
      */
-    asignarCama: tenantProcedure
+    asignarCama: admissionProc
       .input(inpatientAsignarCamaInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -402,7 +420,7 @@ export const inpatientRouter = router({
      * status: BED_ASSIGNED → ACTIVE. Marca la cama como OCCUPIED y crea
      * el BedAssignment legacy para compat con módulos existentes.
      */
-    confirmarRecepcionFisica: tenantProcedure
+    confirmarRecepcionFisica: admissionProc
       .input(inpatientConfirmarRecepcionFisicaInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -504,7 +522,7 @@ export const inpatientRouter = router({
      * Solo permitido antes de asignar cama (la admisión no llegó a tener
      * recursos comprometidos). El motivo es obligatorio para auditoría.
      */
-    cancelarPreCama: tenantProcedure
+    cancelarPreCama: admissionProc
       .input(inpatientCancelarPreCamaInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -548,7 +566,7 @@ export const inpatientRouter = router({
      * Beta.1 — Transición ACTIVE → DISCHARGED. Libera cama si la admisión tenía
      * BedAssignment activa.
      */
-    discharge: tenantProcedure
+    discharge: dischargeProc
       .input(inpatientAdmissionDischargeInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -614,7 +632,7 @@ export const inpatientRouter = router({
       }),
 
     /** Beta.1 — Transición ACTIVE → ON_LEAVE (permiso pase domiciliario). */
-    goOnLeave: tenantProcedure
+    goOnLeave: clinicalProc
       .input(inpatientAdmissionGoOnLeaveInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -658,7 +676,7 @@ export const inpatientRouter = router({
       }),
 
     /** Beta.1 — Transición ON_LEAVE → ACTIVE. */
-    returnFromLeave: tenantProcedure
+    returnFromLeave: clinicalProc
       .input(inpatientAdmissionReturnFromLeaveInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -705,7 +723,7 @@ export const inpatientRouter = router({
       }),
 
     /** Beta.1 — Transición ACTIVE → TRANSFERRED_OUT (a otra organización). */
-    transferOut: tenantProcedure
+    transferOut: dischargeProc
       .input(inpatientAdmissionTransferOutInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -788,7 +806,7 @@ export const inpatientRouter = router({
      * `DomainEvent vital.critical` en la misma transacción que el create
      * (outbox transaccional). El dispatcher resuelve al médico tratante.
      */
-    record: tenantProcedure
+    record: clinicalProc
       .input(inpatientVitalsRecordInput)
       .mutation(async ({ ctx, input }) => {
         // R02 — la creación de InpatientVitals corre demotada (RLS aplica);
@@ -891,7 +909,7 @@ export const inpatientRouter = router({
         return { vitals, alerts };
       }),
 
-    listByAdmission: tenantProcedure
+    listByAdmission: readProc
       .input(z.object({ admissionId: z.string().uuid(), limit: z.number().int().min(1).max(200).default(50) }))
       .query(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -914,7 +932,7 @@ export const inpatientRouter = router({
      * Errores de redacción se corrigen con una nueva entrada que referencie
      * la previa en texto libre (Wave 2: campo amendOfId formal).
      */
-    create: tenantProcedure
+    create: clinicalProc
       .input(inpatientKardexCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -959,7 +977,7 @@ export const inpatientRouter = router({
   }),
 
   carePlan: router({
-    create: tenantProcedure
+    create: clinicalProc
       .input(inpatientCarePlanCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1002,7 +1020,7 @@ export const inpatientRouter = router({
         });
       }),
 
-    updateStatus: tenantProcedure
+    updateStatus: clinicalProc
       .input(inpatientCarePlanUpdateStatusInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
