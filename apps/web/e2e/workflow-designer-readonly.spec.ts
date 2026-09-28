@@ -85,13 +85,18 @@ test.describe("US.F2.2.15 — Vista de solo lectura para roles no editores", () 
 
 test.describe("US.F2.2.16 — Vista mobile-friendly (viewport < 768px)", () => {
   test("viewport 360px renderiza MobileView con lista de estados", async ({ browser }) => {
-    // Crear contexto con viewport móvil
-    const context = await browser.newContext({
-      viewport: { width: 360, height: 640 },
-    });
+    // Contexto en tamaño desktop para el login: KioskAutoRedirect
+    // (components/kiosk-auto-redirect.tsx) se monta en /dashboard y
+    // redirige a /orientacion?montaje=kiosko en cualquier viewport
+    // <=1024px — login() nunca ve la URL /dashboard que espera y
+    // `waitForURL` revienta por timeout. Achicamos el viewport DESPUÉS
+    // del login, ya lejos de /dashboard, para probar el layout mobile de
+    // workflow-designer sin disparar el guard de kiosko.
+    const context = await browser.newContext();
     const page = await context.newPage();
 
     await login(page, "admin");
+    await page.setViewportSize({ width: 360, height: 640 });
     const href = await getFirstWorkflowHref(page);
     if (!href) {
       await context.close();
@@ -125,12 +130,13 @@ test.describe("US.F2.2.16 — Vista mobile-friendly (viewport < 768px)", () => {
   });
 
   test("viewport 375px — ReactFlow canvas ausente en mobile", async ({ browser }) => {
-    const context = await browser.newContext({
-      viewport: { width: 375, height: 812 },
-    });
+    // Mismo motivo que el test anterior: viewport móvil se aplica DESPUÉS
+    // del login para no disparar KioskAutoRedirect en /dashboard.
+    const context = await browser.newContext();
     const page = await context.newPage();
 
     await login(page, "admin");
+    await page.setViewportSize({ width: 375, height: 812 });
     const href = await getFirstWorkflowHref(page);
     if (!href) {
       await context.close();
