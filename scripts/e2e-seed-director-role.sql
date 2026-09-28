@@ -23,9 +23,21 @@
 -- Resuelve la org operativa igual que seed-test-users.mjs (la que tiene
 -- Establishment) en vez de un id fijo. Idempotente vía el mismo
 -- @@unique([organizationId, code]) de Role que usa 64_director_role.sql.
+--
+-- ORDER BY determinista (2026-09-28, hallazgo @QA): si el seed efímero
+-- llegara a crear Establishments en más de una org, un `LIMIT 1` sin ORDER
+-- BY puede resolver una org distinta de la que usan los demás scripts de
+-- bootstrap, dejando qa.director sin acceso real a los datos de prueba.
+-- NOTA: packages/database/scripts/seed-test-users.mjs:81 hace el MISMO
+-- `SELECT "organizationId" FROM public."Establishment" LIMIT 1` sin ORDER
+-- BY — no es "el criterio determinista que ya usa" (así lo llamó el
+-- hallazgo original), comparte el mismo problema. Hoy es inofensivo porque
+-- `prisma/seed.ts` crea un solo Establishment, así que no se toca ese
+-- archivo en este cambio (fuera del alcance de este workstream) — queda
+-- reportado como deuda si algún día se siembra más de uno.
 INSERT INTO public."Role" (id, "organizationId", code, name, description, active, "createdAt", "updatedAt")
 SELECT gen_random_uuid(), e."organizationId", 'DIR', 'Director',
        'Dirección del establecimiento — certifica documentos ECE (Art. 21 NTEC)',
        true, now(), now()
-FROM (SELECT "organizationId" FROM public."Establishment" LIMIT 1) e
+FROM (SELECT "organizationId" FROM public."Establishment" ORDER BY "id" LIMIT 1) e
 ON CONFLICT ("organizationId", code) DO NOTHING;

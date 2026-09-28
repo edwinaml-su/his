@@ -229,41 +229,40 @@ try {
       [IDS.ecePersonalNurse, IDS.eceInstitucion, IDS.eceEstab, qaNurse.id],
     );
   }
-  // indicaciones-medicas.router.ts `eceIds()` NO resuelve personal_salud por
-  // his_user_id (esa es la convención de identity-resolver.ts, usada por
-  // OTROS routers) — devuelve `ctx.user.id` DIRECTO como `personalId`, que
-  // luego se INSERTa en `indicaciones_medicas.medico_prescriptor`, columna
-  // con FK a `ece.personal_salud(id)`. Sin una fila cuyo `id` (no
-  // `his_user_id`) sea igual al `User.id` del médico/enfermera, create()
-  // revienta con 23503 (FK violation) — hallazgo @QA (2026-09-28,
-  // farmacia-circuito.spec.ts). SQL 257 (r1_sync_personal_salud, no aplicado
-  // en el bootstrap E2E) automatiza justo esto para usuarios reales vía
-  // trigger + backfill; acá se siembra el resultado equivalente a mano, con
-  // ids DISTINTOS de IDS.ecePersonal/ecePersonalNurse (namespace
-  // his_user_id) para no chocar con esas filas ni con nada que las
-  // referencie por índice determinista.
-  if (qaPhysician) {
-    await c.query(
-      `INSERT INTO ece.personal_salud
-         (id, institucion_id, establecimiento_id, documento_identidad,
-          nombre_completo, profesion, his_user_id)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'QA Physician',
-               'Medicina General', $1::uuid)
-       ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
-      [qaPhysician.id, IDS.eceInstitucion, IDS.eceEstab, `E2E-DOC-${qaPhysician.id.slice(0, 8)}`],
-    );
-  }
-  if (qaNurse) {
-    await c.query(
-      `INSERT INTO ece.personal_salud
-         (id, institucion_id, establecimiento_id, documento_identidad,
-          nombre_completo, profesion, his_user_id)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'QA Nurse',
-               'Enfermería', $1::uuid)
-       ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
-      [qaNurse.id, IDS.eceInstitucion, IDS.eceEstab, `E2E-ENF-${qaNurse.id.slice(0, 8)}`],
-    );
-  }
+  // NO se siembra una SEGUNDA fila `ece.personal_salud` con `id = User.id`
+  // "para que `eceIds()` funcione" — se intentó (2026-09-28) y un revisor
+  // @QA lo marcó `major`, con razón: `his_user_id` es UNIQUE en prod
+  // (sql/57_ece_02_seguridad.sql:37, identity-resolver.ts:21) y esta BD
+  // efímera (creada con `prisma db push`, sin ese constraint) habría quedado
+  // con DOS filas para el mismo `his_user_id` (esta + IDS.ecePersonal/
+  // ecePersonalNurse arriba). Cualquier router que resuelva por
+  // `WHERE his_user_id = X LIMIT 1` SIN `ORDER BY` (who-checklist.router.ts,
+  // bridge-cirugia.router.ts, episodio-hospitalario.router.ts, etc.)
+  // habría empezado a elegir una de las dos filas al azar — no reproduce el
+  // estado real de prod y vuelve no-determinista a CUALQUIER otra spec que
+  // dependa de esos routers, no solo a farmacia-circuito.
+  //
+  // La fila que "arreglaba" el atajo también ocultaba un bug de producto
+  // real: `indicaciones-medicas.router.ts` `eceIds()` (línea ~452) devuelve
+  // `ctx.user.id` DIRECTO como `personalId`, que se INSERTa en
+  // `indicaciones_medicas.medico_prescriptor` (FK a `ece.personal_salud(id)`,
+  // sql/61_ece_06_documentos.sql:194) en vez de resolver la fila real vía
+  // `resolvePersonalSalud`/`requirePersonalSalud` (identity-resolver.ts) —
+  // esos dos espacios de id NUNCA son el mismo (ver el comentario de cabecera
+  // de identity-resolver.ts). `SQL 257` (`fn_sync_personal_salud`) NO
+  // automatiza "id = his_user_id": genera su PROPIO `v_personal_id` nuevo
+  // (ver `packages/database/sql/257_r1_sync_personal_salud.sql`) — la
+  // afirmación anterior en este comentario era incorrecta.
+  //
+  // Consecuencia real, sin el atajo: CPOE `create()` (test 1 de
+  // `farmacia-circuito.spec.ts`) falla hoy con 23503 para CUALQUIER médico
+  // real, porque ningún usuario tiene una fila `ece.personal_salud` cuyo
+  // `id` (no `his_user_id`) coincida con su `User.id`. Es un bug de
+  // producto P0 (bloquea firmar cualquier indicación médica vía CPOE ECE en
+  // prod), reportado a @PO/@Orq — el fix correcto es hacer que `eceIds()`
+  // use `requirePersonalSalud(tx, ctx.user.id)` como el resto de los
+  // routers migrados, en su propio PR de producto (no en este seeder de
+  // E2E). El test 1 queda en rojo a propósito hasta que se corrija.
   await c.query(
     `INSERT INTO ece.episodio_atencion
        (id, paciente_id, establecimiento_id, modalidad, servicio_categoria,

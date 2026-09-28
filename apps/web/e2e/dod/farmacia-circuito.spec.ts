@@ -67,9 +67,7 @@
  * en vez de completar la administración. Por eso `test 3` y `test 4`
  * (que depende de que la administración exista) se dejan en rojo — no se
  * usa `test.skip`/`fixme` para maquillarlos, y no se "hace trampa" sembrando
- * `descripcion=GTIN` para forzar el verde. `test 1`, `test 2`, `test 5` y el
- * escenario negativo (archivo `farmacia-circuito-hard-stop`, ver abajo) sí
- * son 100% reales y deben quedar verdes.
+ * `descripcion=GTIN` para forzar el verde.
  *
  * Fix correcto (fuera de alcance de esta sesión QA, requiere @DBA + tocar
  * ≥2 routers): agregar `Drug.gtin` (o una tabla puente Drug↔GTIN, dado que
@@ -78,6 +76,35 @@
  * Paso 4, que HOY tampoco valida el GTIN contra el ítem de receta — toma
  * `prescription.items[0]` a ciegas) a resolver el medicamento por
  * `drug_id`/`Drug.gtin` en vez de texto libre.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * SEGUNDO HALLAZGO BLOQUEANTE (2026-09-28, revisión @QA independiente) —
+ * `test 1` TAMBIÉN queda en rojo, y por una razón distinta a la de arriba:
+ *
+ * `indicaciones-medicas.router.ts` `eceIds()` devuelve `ctx.user.id` DIRECTO
+ * como `personalId` en vez de resolver la fila `ece.personal_salud` real vía
+ * `requirePersonalSalud` (identity-resolver.ts) — esos dos espacios de id
+ * NUNCA coinciden (ver el comentario de cabecera de identity-resolver.ts).
+ * `personalId` se INSERTa en `indicaciones_medicas.medico_prescriptor`, FK a
+ * `ece.personal_salud(id)` (sql/61_ece_06_documentos.sql:194): la firma real
+ * de CUALQUIER médico revienta con 23503. Un intento anterior de esta misma
+ * sesión "arregló" esto sembrando en `seed-e2e-fixtures.mjs` una fila
+ * `ece.personal_salud` con `id = User.id` — un segundo revisor lo marcó
+ * `major` porque, además de no reflejar cómo se resuelve esto en prod,
+ * rompía la unicidad de `his_user_id` (creaba una SEGUNDA fila con el mismo
+ * `his_user_id` que la ya sembrada arriba) y volvía no-determinista a
+ * cualquier otro router que resuelva `personal_salud` por `his_user_id`. Se
+ * revirtió (ver el comentario en ese archivo) — `test 1` queda en rojo
+ * reportando el bug real, en vez de verde por un atajo que rompía otras
+ * specs. Reportado como P0 a @PO/@Orq: fix correcto es migrar `eceIds()` a
+ * `requirePersonalSalud(tx, ctx.user.id)`, en su propio PR de producto.
+ *
+ * Consecuencia en cascada (esperada, no un bug de este spec): con `test 1`
+ * en rojo, `test 2` y `test 3` (que resuelven su precondición por API, no
+ * por closure — ver el describe principal) fallan también al no encontrar
+ * la Prescription/indicación que `test 1` debía haber creado. `test 4` y
+ * `test 5` siguen corriendo (no usan `test.describe.serial()`) y reportan su
+ * propio resultado real.
  *
  * Fixtures dedicados: packages/database/scripts/seed-e2e-fixtures.mjs §8
  * (namespace `e2ef3000`) / apps/web/e2e/_helpers/fixtures.ts
@@ -174,14 +201,21 @@ async function firmarYEsperarToast(page: Page) {
 // ---------------------------------------------------------------------------
 
 test.describe("@dod - Circuito de farmacia completo", () => {
-  // Estado compartido entre los 5 pasos — mismo patrón que otras specs
-  // multi-actor (pharmacy-substitution.spec.ts). `workers:1` garantiza orden
-  // secuencial dentro del archivo; NO se usa `test.describe.serial()` a
-  // propósito: si el paso 3 falla (hallazgo documentado arriba), el paso 5
-  // (auditoría de la Prescription, que no depende de la administración)
-  // debe poder seguir corriendo y reportar su propio resultado real.
-  let indicacionId = "";
-  let prescriptionIdA = "";
+  // `retries: 0` (sobre-escribe el global de playwright.config.ts) — hallazgo
+  // @QA (2026-09-28): cada test resuelve su propia precondición por API en
+  // vez de leer un closure de JS llenado por un test anterior (ver debajo),
+  // así que un retry de CUALQUIER test de este describe volvería a ejecutar
+  // su UI completa (prescribir, firmar, dispensar...) y crearía indicaciones/
+  // Prescriptions DUPLICADAS para el mismo paciente/episodio — el `.find()`
+  // de cada resolución por API dejaría de ser unívoco y el locator `li` de
+  // los pasos de UI (dispensa, bedside) podría violar el modo estricto de
+  // Playwright. `workers:1` ya da orden secuencial dentro del archivo; NO se
+  // usa `test.describe.serial()` a propósito: si el paso 3 falla (hallazgo
+  // documentado arriba), el paso 5 (auditoría de la Prescription, que no
+  // depende de la administración) debe poder seguir corriendo y reportar su
+  // propio resultado real — `serial` saltaría automáticamente TODO lo que
+  // sigue a la primera falla, lo cual rompería esa garantía.
+  test.describe.configure({ retries: 0 });
 
   test("1. Médico prescribe y firma una indicación con medicamento estructurado (ADR 0023 auto-genera la Prescription)", async ({
     page,
@@ -215,7 +249,6 @@ test.describe("@dod - Circuito de farmacia completo", () => {
     expect(list.ok, `eceIndicaciones.list falló: ${list.errorMessage}`).toBeTruthy();
     const firmada = list.data?.items.find((i) => i.estado_registro === "firmado");
     expect(firmada, "la indicación recién creada debió quedar en estado 'firmado'").toBeTruthy();
-    indicacionId = firmada!.id;
 
     const rx = await trpcQuery<PrescriptionListRow[]>(page.request, "pharmacy.prescription.list", {
       patientId: E2E_DOD_FARMACIA.patientId,
@@ -230,13 +263,32 @@ test.describe("@dod - Circuito de farmacia completo", () => {
         "la indicación con drug_id estructurado — si esto falla, el punto único de prescripción está roto.",
     ).toBeTruthy();
     expect(generated!.status).toBe("SIGNED");
-    prescriptionIdA = generated!.id;
+    // NO se guarda en una variable de módulo para que la lean los tests 2/3:
+    // cada test resuelve su propia precondición por API (hallazgo @QA
+    // 2026-09-28, ver comentario de `retries: 0` arriba) — un `test.skip`
+    // condicional sobre un closure se vuelve "flaky" en vez de "failed"
+    // cuando Playwright reintenta el test 3 en un worker nuevo (estado de
+    // módulo reseteado) tras el hard stop documentado más abajo.
   });
 
   test("2. Farmacia valida lote/stock real (inventario) y dispensa vía escaneo GS1", async ({ page }) => {
-    test.skip(!prescriptionIdA, "requiere la Prescription generada en el paso 1");
-
     await login(page, "admin"); // rol PHARM en el seed (ver pharmacy-cart.spec.ts)
+
+    // Precondición resuelta por API (no closure del test 1 — ver comentario
+    // de `retries: 0` arriba). Si el paso 1 no generó la Prescription (p.ej.
+    // por el bug de identidad de `eceIds()` documentado en
+    // seed-e2e-fixtures.mjs), esto falla con un mensaje explícito en vez de
+    // saltarse en silencio.
+    const rx = await trpcQuery<PrescriptionListRow[]>(page.request, "pharmacy.prescription.list", {
+      patientId: E2E_DOD_FARMACIA.patientId,
+    });
+    expect(rx.ok, `pharmacy.prescription.list falló: ${rx.errorMessage}`).toBeTruthy();
+    const generated = rx.data?.find((p) =>
+      p.items.some((it) => it.drug.genericName === E2E_DOD_FARMACIA.drugA.genericName),
+    );
+    expect(generated, "requiere la Prescription generada en el paso 1 — no se encontró vía API").toBeTruthy();
+    const prescriptionIdA = generated!.id;
+
     await page.goto("/pharmacy/dispense");
     await expect(page.getByRole("heading", { name: /picking/i })).toBeVisible();
 
@@ -258,9 +310,20 @@ test.describe("@dod - Circuito de farmacia completo", () => {
   test("3. Enfermería identifica al paciente, escanea BCMA y administra el medicamento prescrito", async ({
     page,
   }) => {
-    test.skip(!indicacionId, "requiere la indicación firmada en el paso 1");
-
     await login(page, "nurse");
+
+    // Precondición resuelta por API (no closure del test 1 — ver comentario
+    // de `retries: 0` en el describe). `clinicalProcedure` (PHYSICIAN/MC/
+    // NURSE/ENF) cubre a "nurse" para `eceIndicaciones.list`.
+    const list = await trpcQuery<{ items: EceIndicacionRow[] }>(page.request, "eceIndicaciones.list", {
+      episodioId: E2E_DOD_FARMACIA.episodioId,
+      limit: 20,
+    });
+    expect(list.ok, `eceIndicaciones.list falló: ${list.errorMessage}`).toBeTruthy();
+    const firmada = list.data?.items.find((i) => i.estado_registro === "firmado");
+    expect(firmada, "requiere la indicación firmada en el paso 1 — no se encontró vía API").toBeTruthy();
+    const indicacionId = firmada!.id;
+
     await page.goto(`/bedside/${E2E_DOD_FARMACIA.patientId}/${indicacionId}`);
     await expect(page).toHaveURL(/\/bedside\//);
 
