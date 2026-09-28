@@ -336,6 +336,38 @@ export function hasApplicableReferenceRange(
 }
 
 /**
+ * P1-13/B29 (revisión post-merge) — extraído de `evaluateLabResultFlag` para
+ * que los callers (p.ej. `result.enter` en lis.router) puedan informar en
+ * sus payloads (evento `lab.criticalValue`, `critical_result_notification`)
+ * el MISMO rango que gobernó el flag, en vez de reconstruir uno aparte desde
+ * `LabTest.refRangeLow/High`. Devuelve `null` si ningún rango de `ranges`
+ * aplica al paciente (mismo criterio de `filterApplicableRanges`).
+ */
+export function selectReferenceRange(
+  ranges: LabReferenceRange[],
+  age: number | null | undefined,
+  sex: LisSex | null | undefined,
+): LabReferenceRange | null {
+  const candidates = filterApplicableRanges(ranges, age ?? null, sex ?? "BOTH");
+  if (candidates.length === 0) return null;
+
+  // Prefiere reglas con sex/edad específicos > generales (BOTH/null). Sort
+  // estable (spec ES2019+): en empate de especificidad conserva el orden de
+  // `ranges` — por eso el caller debe pasar candidatos pre-ordenados por
+  // precedencia (p.ej. tenant antes que catálogo global).
+  const ranked = [...candidates].sort((a, b) => {
+    const aSpecificity =
+      (a.sex !== "BOTH" ? 2 : 0) +
+      (a.ageMinYears !== null || a.ageMaxYears !== null ? 1 : 0);
+    const bSpecificity =
+      (b.sex !== "BOTH" ? 2 : 0) +
+      (b.ageMinYears !== null || b.ageMaxYears !== null ? 1 : 0);
+    return bSpecificity - aSpecificity;
+  });
+  return ranked[0]!;
+}
+
+/**
  * Evalúa el flag apropiado para un resultado numérico contra reference range
  * estratificado por edad/sexo. Si no se proporcionan rangos, retorna NORMAL.
  * Si valueNumeric es null/undefined, retorna NORMAL (resultados cualitativos
@@ -351,24 +383,8 @@ export function evaluateLabResultFlag(input: {
     return "NORMAL";
   }
   const value = input.valueNumeric;
-  const sex = input.patientSex ?? "BOTH";
-  const age = input.patientAgeYears ?? null;
-
-  // Selecciona la mejor regla matching (más específica primero).
-  const candidates = filterApplicableRanges(input.ranges, age, sex);
-  if (candidates.length === 0) return "NORMAL";
-
-  // Prefiere reglas con sex/edad específicos > generales (BOTH/null).
-  const ranked = [...candidates].sort((a, b) => {
-    const aSpecificity =
-      (a.sex !== "BOTH" ? 2 : 0) +
-      (a.ageMinYears !== null || a.ageMaxYears !== null ? 1 : 0);
-    const bSpecificity =
-      (b.sex !== "BOTH" ? 2 : 0) +
-      (b.ageMinYears !== null || b.ageMaxYears !== null ? 1 : 0);
-    return bSpecificity - aSpecificity;
-  });
-  const range = ranked[0]!;
+  const range = selectReferenceRange(input.ranges, input.patientAgeYears, input.patientSex);
+  if (!range) return "NORMAL";
 
   // Críticos primero (mayor severidad).
   if (range.criticalLow !== null && range.criticalLow !== undefined && value <= range.criticalLow) {

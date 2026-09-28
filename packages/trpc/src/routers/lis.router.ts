@@ -41,6 +41,7 @@ import {
   resultValidateInput,
   evaluateLabResultFlag,
   hasApplicableReferenceRange,
+  selectReferenceRange,
   isCriticalFlag,
   labPanelCreateInput,
   labPanelUpdateInput,
@@ -1899,6 +1900,12 @@ export const lisRouter = router({
 
           // Beta.3 — Determinar el flag final.
           let finalFlag: LisResultFlag = input.flag;
+          // Revisión post-merge (hallazgo mayor) — rango que efectivamente
+          // gobernó `finalFlag`, para que los payloads de valor crítico
+          // (más abajo) informen el MISMO rango, no uno reconstruido aparte
+          // desde LabTest.refRangeLow/High. Queda null si forceFlagOverride
+          // evitó este bloque, o si no hubo ningún rango aplicable.
+          let selectedRange: LabReferenceRange | null = null;
           if (!input.forceFlagOverride && input.valueNumeric != null) {
             // P1-13/B29 (auditoría 2026-09-15, docs/audit/2026-09-15_cobertura/
             // 02-hc-farmacia-lab-imagen.md) — antes de recurrir a la
@@ -1923,8 +1930,15 @@ export const lisRouter = router({
             // `LabReferenceRange` son minValue EXCLUSIVO / maxValue EXCLUSIVO
             // y los críticos criticalLow/criticalHigh INCLUSIVOS — igual que
             // en el fallback (ver `evaluateLabResultFlag`).
+            //
+            // orderBy: tenant (organizationId no-null) antes que catálogo
+            // global, y luego id como desempate estable — evita que el
+            // override del laboratorio quede ignorado por orden físico
+            // arbitrario de filas empatadas en especificidad (hallazgo
+            // menor, revisión post-merge).
             const dbRanges = await tx.labReferenceRange.findMany({
               where: { labTestId: item.testId, active: true },
+              orderBy: [{ organizationId: { sort: "asc", nulls: "last" } }, { id: "asc" }],
               select: {
                 minValue: true,
                 maxValue: true,
@@ -1935,21 +1949,54 @@ export const lisRouter = router({
                 criticalHigh: true,
               },
             });
-            const stratifiedRanges: LabReferenceRange[] = dbRanges.map((r) => ({
-              minValue: decimalToNullableNumber(r.minValue),
-              maxValue: decimalToNullableNumber(r.maxValue),
-              ageMinYears: r.ageMinYears,
-              ageMaxYears: r.ageMaxYears,
-              sex: r.sex as LisSex,
-              criticalLow: decimalToNullableNumber(r.criticalLow),
-              criticalHigh: decimalToNullableNumber(r.criticalHigh),
-            }));
+            const stratifiedRanges: LabReferenceRange[] = dbRanges.map((r) => {
+              const minValue = decimalToNullableNumber(r.minValue);
+              const maxValue = decimalToNullableNumber(r.maxValue);
+              return {
+                minValue,
+                maxValue,
+                ageMinYears: r.ageMinYears,
+                ageMaxYears: r.ageMaxYears,
+                sex: r.sex as LisSex,
+                // Hallazgo menor (revisión post-merge): criticalLow/criticalHigh
+                // son columnas nullable (sql/27_lis_hardening_v2.sql) y nada
+                // exige llenarlas al cargar el catálogo. Si el test está
+                // marcado critical y la fila estratificada no trae sus propios
+                // límites críticos, se completan con la MISMA heurística ±50%
+                // del fallback Wave 1 (`buildReferenceRangesFromTest`) aplicada
+                // sobre el minValue/maxValue de esa fila — nunca se pierde la
+                // alerta de valor crítico solo por catálogo incompleto.
+                criticalLow:
+                  decimalToNullableNumber(r.criticalLow) ??
+                  (item.test.critical && minValue !== null ? minValue - Math.abs(minValue) * 0.5 : null),
+                criticalHigh:
+                  decimalToNullableNumber(r.criticalHigh) ??
+                  (item.test.critical && maxValue !== null ? maxValue + Math.abs(maxValue) * 0.5 : null),
+              };
+            });
+            // Hallazgo mayor (revisión post-merge): sin esto, con edad o
+            // sexo desconocidos `filterApplicableRanges` (@his/contracts)
+            // no descarta ningún tramo por ese eje — un adulto sin
+            // birthDate podía terminar evaluado contra un rango pediátrico
+            // (o viceversa), y un sexo desconocido aceptaba filas MALE y
+            // FEMALE por igual. Se restringe aquí, antes de decidir si el
+            // catálogo estratificado aplica, a las filas que de verdad son
+            // agnósticas en el eje desconocido.
+            let applicableRows = stratifiedRanges;
+            if (patientAgeYears === null) {
+              applicableRows = applicableRows.filter(
+                (r) => r.ageMinYears === null && r.ageMaxYears === null,
+              );
+            }
+            if (patientSex === null) {
+              applicableRows = applicableRows.filter((r) => r.sex === "BOTH");
+            }
             const ranges: LabReferenceRange[] = hasApplicableReferenceRange(
-              stratifiedRanges,
+              applicableRows,
               patientAgeYears,
               patientSex,
             )
-              ? stratifiedRanges
+              ? applicableRows
               : buildReferenceRangesFromTest({
                   refRangeLow: item.test.refRangeLow,
                   refRangeHigh: item.test.refRangeHigh,
@@ -1961,6 +2008,7 @@ export const lisRouter = router({
               patientAgeYears,
               patientSex,
             });
+            selectedRange = selectReferenceRange(ranges, patientAgeYears, patientSex);
           }
 
           const isCritical = isCriticalFlag(finalFlag);
@@ -1993,9 +2041,14 @@ export const lisRouter = router({
               flag: finalFlag as "CRITICAL_LOW" | "CRITICAL_HIGH",
               value: input.valueNumeric as number,
               unit: input.valueUnit ?? item.test.unit ?? undefined,
+              // Hallazgo menor (revisión post-merge): informar el rango que
+              // REALMENTE gobernó `finalFlag` (selectedRange, estratificado
+              // o fallback) en vez de reconstruir uno aparte desde
+              // LabTest.refRangeLow/High — evitaba read-back (IPSG.2)
+              // clínicamente incoherente con el flag emitido.
               referenceRange: {
-                low: decimalToNullableNumber(item.test.refRangeLow),
-                high: decimalToNullableNumber(item.test.refRangeHigh),
+                low: selectedRange?.minValue ?? decimalToNullableNumber(item.test.refRangeLow),
+                high: selectedRange?.maxValue ?? decimalToNullableNumber(item.test.refRangeHigh),
               },
             };
             await emitDomainEvent(tx, {
@@ -2051,9 +2104,11 @@ export const lisRouter = router({
                   flag: finalFlag,
                   value: input.valueNumeric,
                   unit: input.valueUnit ?? item.test.unit ?? null,
+                  // Mismo rango que el payload de `lab.criticalValue` arriba
+                  // (selectedRange) — ver comentario en ese bloque.
                   referenceRange: {
-                    low: decimalToNullableNumber(item.test.refRangeLow),
-                    high: decimalToNullableNumber(item.test.refRangeHigh),
+                    low: selectedRange?.minValue ?? decimalToNullableNumber(item.test.refRangeLow),
+                    high: selectedRange?.maxValue ?? decimalToNullableNumber(item.test.refRangeHigh),
                   },
                 },
                 // Ambos flags CRITICAL_LOW/CRITICAL_HIGH ya son el nivel más
