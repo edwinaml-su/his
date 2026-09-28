@@ -511,6 +511,53 @@ describe("firmaElectronicaRouter", () => {
       ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // firma.history — R03: resolvePersonalSalud(includeInactive: true).
+  // Regresión cubierta: la subquery original (`personal_id IN (SELECT id FROM
+  // ece.personal_salud WHERE his_user_id = $1)`) no filtraba por `activo`, así
+  // que el historial de un profesional dado de baja seguía siendo consultable.
+  // -------------------------------------------------------------------------
+
+  describe("history", () => {
+    it("personal_salud INACTIVO (activo=false) sigue devolviendo su bitácora — no regresión", async () => {
+      // resolvePersonalSalud(includeInactive: true) SÍ encuentra la fila aunque
+      // esté inactiva (a diferencia del resolver por defecto, que la ocultaría).
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { id: PERSONA_ID, nombre_completo: "Dr. Baja Reciente", establecimiento_id: "00000000-0000-0000-0000-0000000000e1" },
+      ] as never);
+      prisma.$queryRawUnsafe
+        .mockResolvedValueOnce([{ total: 1n }] as never) // count
+        .mockResolvedValueOnce([{
+          id: "00000000-0000-0000-0000-000000000099",
+          personal_id: PERSONA_ID,
+          accion: "verify",
+          autorizado: true,
+          ip_origen: "10.0.0.1",
+          ocurrido_en: new Date("2026-01-01T00:00:00Z"),
+          justificacion: null,
+          auth_user_id: USER_ID,
+        }] as never); // filas
+
+      const caller = makeCaller(prisma);
+      const result = await caller.history({});
+
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]!.personalId).toBe(PERSONA_ID);
+    });
+
+    it("sin fila personal_salud (ni activa ni inactiva) devuelve historial vacío, no error", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([] as never); // resolvePersonalSalud -> null
+
+      const caller = makeCaller(prisma);
+      const result = await caller.history({});
+
+      expect(result).toEqual({ items: [], total: 0 });
+      // No debe llegar a consultar bitacora_acceso si no hay personal_id.
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ===========================================================================

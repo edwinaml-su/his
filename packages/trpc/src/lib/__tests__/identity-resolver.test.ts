@@ -59,6 +59,29 @@ describe("resolvePersonalSalud", () => {
     // Segundo argumento posicional del tagged template es el valor interpolado.
     expect(call[1]).toBe(HIS_USER_ID);
   });
+
+  it("con includeInactive: true, la query NO filtra por activo (lecturas de auditoría)", async () => {
+    const tx = makeTx([
+      { id: PERSONAL_ID, nombre_completo: "Dr. Inactivo", establecimiento_id: ESTABLECIMIENTO_ID },
+    ]);
+    const result = await resolvePersonalSalud(tx, HIS_USER_ID, { includeInactive: true });
+    expect(result).toEqual({
+      id: PERSONAL_ID,
+      nombreCompleto: "Dr. Inactivo",
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
+    const call = vi.mocked(tx.$queryRaw).mock.calls[0]!;
+    const sqlStrings = (call[0] as TemplateStringsArray).join("");
+    expect(sqlStrings).not.toMatch(/activo/);
+  });
+
+  it("sin includeInactive (default), la query SÍ filtra por activo = true", async () => {
+    const tx = makeTx([]);
+    await resolvePersonalSalud(tx, HIS_USER_ID);
+    const call = vi.mocked(tx.$queryRaw).mock.calls[0]!;
+    const sqlStrings = (call[0] as TemplateStringsArray).join("");
+    expect(sqlStrings).toMatch(/activo = true/);
+  });
 });
 
 describe("requirePersonalSalud", () => {

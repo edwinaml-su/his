@@ -110,26 +110,52 @@ interface PersonalSaludRow {
   establecimiento_id: string;
 }
 
+export interface ResolvePersonalSaludOptions {
+  /**
+   * true omite el filtro `activo = true`. Uso restringido a lecturas de
+   * auditoría (ej. `firma.history`) donde un profesional dado de baja debe
+   * seguir siendo consultable — dar de baja a alguien no debe borrar su
+   * rastro de bitácora. NUNCA usar para resolver un `personal_id` que vaya
+   * a autorizar/firmar/crear algo nuevo: para eso el profesional debe estar
+   * activo.
+   */
+  includeInactive?: boolean;
+}
+
 /**
  * Resuelve la fila `ece.personal_salud` activa vinculada a `hisUserId`
  * (= `public."User".id`, típicamente `ctx.user.id`).
  *
- * Devuelve `null` si no existe fila, si existe pero `activo = false`, o si
- * RLS la esconde por contexto de establecimiento ausente/incorrecto — los
- * tres casos son indistinguibles desde acá a propósito (ver contrato de uso
- * arriba); el caller decide cómo reaccionar. Para el caso común ("necesito
- * la fila o debo fallar con un mensaje claro") usar `requirePersonalSalud`.
+ * Devuelve `null` si no existe fila, si existe pero `activo = false` (salvo
+ * `includeInactive: true`), o si RLS la esconde por contexto de
+ * establecimiento ausente/incorrecto — estos casos son indistinguibles desde
+ * acá a propósito (ver contrato de uso arriba); el caller decide cómo
+ * reaccionar. Para el caso común ("necesito la fila o debo fallar con un
+ * mensaje claro") usar `requirePersonalSalud`.
  */
 export async function resolvePersonalSalud(
   tx: PersonalSaludTx,
   hisUserId: string,
+  options: ResolvePersonalSaludOptions = {},
 ): Promise<PersonalSalud | null> {
-  const rows = await (
-    tx.$queryRaw as (
-      query: TemplateStringsArray,
-      ...values: unknown[]
-    ) => Promise<PersonalSaludRow[]>
-  )`
+  const rows = options.includeInactive
+    ? await (
+        tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<PersonalSaludRow[]>
+      )`
+    SELECT id::text, nombre_completo, establecimiento_id::text
+    FROM ece.personal_salud
+    WHERE his_user_id = ${hisUserId}::uuid
+    LIMIT 1
+  `
+    : await (
+        tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<PersonalSaludRow[]>
+      )`
     SELECT id::text, nombre_completo, establecimiento_id::text
     FROM ece.personal_salud
     WHERE his_user_id = ${hisUserId}::uuid

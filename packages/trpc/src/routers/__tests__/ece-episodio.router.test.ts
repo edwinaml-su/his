@@ -247,6 +247,30 @@ describe("eceEpisodioRouter", () => {
     expect(payload.eventType).toBe("ece.episodio.cerrado");
   });
 
+  // ─── 7b. transicionar sin personal_salud vinculado → cambiado_por NULL ─────
+  // R03: resolvePersonalSalud (no requirePersonalSalud) preserva el
+  // comportamiento previo — sin fila personal_salud, la transición NO se
+  // bloquea, se inserta NULL en episodio_estado_log.cambiado_por.
+
+  it("transicionar sin personal_salud vinculado inserta cambiado_por NULL sin lanzar", async () => {
+    // Solo un valor de $queryRaw: el SELECT de estado actual. El siguiente
+    // $queryRaw (resolvePersonalSalud, dentro de la misma tx) cae al default
+    // `[]` de makePrisma → sin fila.
+    const prisma = makePrisma([[{ id: EPISODIO_ID, estado: "abierto" }]]);
+    const caller = eceEpisodioRouter.createCaller(makeCtx(prisma));
+
+    const result = await caller.transicionar({
+      episodioId: EPISODIO_ID,
+      nuevoEstado: "en_curso",
+    });
+
+    expect(result.ok).toBe(true);
+    // Única llamada a $executeRaw es el UPDATE de estado; el INSERT en
+    // episodio_estado_log va por $executeRaw también — 2da llamada.
+    const insertLogCall = (prisma.$executeRaw as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(insertLogCall[4]).toBeNull();
+  });
+
   // ─── 8. transicionar cancelado → en_curso bloqueado ────────────────────────
 
   it("transicionar desde cancelado lanza CONFLICT", async () => {

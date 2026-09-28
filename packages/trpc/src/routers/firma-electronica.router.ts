@@ -921,7 +921,14 @@ export const firmaElectronicaRouter = router({
       // en vez de reimplementar el lookup como subquery inline. Sin fila
       // personal_salud no hay accesos que mostrar — historial vacío, no error
       // (mismo comportamiento que la subquery original: IN de un set vacío).
-      const personal = await resolvePersonalSalud(ctx.prisma, targetUserId);
+      // includeInactive: true — esta es una lectura de auditoría (bitácora de
+      // accesos), no una resolución de identidad para autorizar/firmar. La
+      // subquery original no filtraba por `activo`, así que el historial de un
+      // profesional dado de baja seguía siendo consultable por ADM/DIR; el
+      // resolver por defecto sí filtra `activo = true` y rompería ese caso.
+      const personal = await resolvePersonalSalud(ctx.prisma, targetUserId, {
+        includeInactive: true,
+      });
       if (!personal) {
         return { items: [], total: 0 };
       }

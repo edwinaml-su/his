@@ -458,5 +458,27 @@ describe("eceEpisodioHospitalarioRouter", () => {
       const caller = makePhysicianCaller(prisma);
       await expect(caller.confirmarAlta(VALID_CONFIRM)).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
+
+    it("13. sin personal_salud vinculado, confirma el alta igual con cambiado_por NULL (no bloquea, R03)", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{
+        episodio_id: EPISODIO_ATEN_ID,
+        estado_episodio: "en_curso",
+        episodio_hosp_id: EPISODIO_HOSP_ID,
+        estado_epicrisis: "firmado",
+        paciente_id: PACIENTE_ID,
+      }]);
+      // resolvePersonalSalud -> null: sin fila personal_salud vinculada al usuario.
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = makePhysicianCaller(prisma);
+      const result = await caller.confirmarAlta(VALID_CONFIRM);
+
+      expect(result.episodioId).toBe(EPISODIO_ATEN_ID);
+      // 4ta llamada a $executeRaw es el INSERT en episodio_estado_log; el valor
+      // interpolado de cambiado_por (2do parámetro posicional) debe ser null —
+      // nunca cae a hisUserId ni bloquea la confirmación de alta.
+      const insertLogCall = prisma.$executeRaw.mock.calls[3]!;
+      expect(insertLogCall[2]).toBeNull();
+    });
   });
 });
