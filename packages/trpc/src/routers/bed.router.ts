@@ -20,9 +20,13 @@ import {
 import { assertGlnAsignable } from "../lib/gln-validation";
 import { capturarCargo } from "../lib/charge-capture";
 import { assertEgresoFisicoAutorizado } from "../lib/egreso-fisico-gate";
-import { ADMISSION_WRITE_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
+import { ADMISSION_WRITE_ROLES, CONFIG_ROLES, PHI_READ_ROLES } from "../rbac/operational-role-sets";
 
-const adminProc = requireRole(["ADMIN", "DIR"]);
+// Catálogo de camas (adminList/create/update/setActive). Antes ["ADMIN","DIR"]:
+// ADMIN existe en 3 orgs y DIR en 1, así que era inoperable en ~20 de las 21
+// orgs multi-org (mismo patrón que CC-0044). CONFIG_ROLES suma SUPER_ADMIN,
+// DIR_PAIS y ADMIN_CLINICO, presentes en las 21.
+const adminProc = requireRole(CONFIG_ROLES);
 // docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md §2
 // — list/getMap/updateStatus/findAvailable/assignToEncounter/release corrían
 // sobre `tenantProcedure` puro (a diferencia de adminList/create/update/

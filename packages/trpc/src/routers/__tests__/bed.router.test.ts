@@ -283,11 +283,19 @@ describe("bedRouter", () => {
       });
     });
 
-    it("lanza FORBIDDEN si el rol no es ADMIN/DIR", async () => {
+    it("lanza FORBIDDEN si el rol no es de configuración (CONFIG_ROLES)", async () => {
       const caller = bedRouter.createCaller(
         makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
       );
       await expect(caller.adminList({})).rejects.toThrow(/Rol requerido/);
+    });
+
+    it("permite ADMIN_CLINICO (rol presente en las 21 orgs multi-org)", async () => {
+      const caller = bedRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMIN_CLINICO"] } }),
+      );
+      await caller.adminList({});
+      expect(prisma.bed.findMany).toHaveBeenCalled();
     });
   });
 
@@ -331,7 +339,7 @@ describe("bedRouter", () => {
       ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
-    it("lanza FORBIDDEN si el rol no es ADMIN/DIR", async () => {
+    it("lanza FORBIDDEN si el rol no es de configuración (CONFIG_ROLES)", async () => {
       const caller = bedRouter.createCaller(
         makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
       );
