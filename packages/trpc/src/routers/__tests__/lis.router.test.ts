@@ -61,6 +61,11 @@ describe("lisRouter", () => {
     // tarea.id / en la iteración de resolveLabSlaMap.
     prisma.careTask.create.mockResolvedValue({ id: w } as never);
     prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
+    // P1-13/B29 — default sin filas estratificadas: preserva el fallback
+    // Wave 1 (heurística ±50%) para todos los tests de result.enter que no
+    // configuran explícitamente LabReferenceRange, igual que en prod hoy
+    // (0 filas verificado 2026-09-27).
+    prisma.labReferenceRange.findMany.mockResolvedValue([] as never);
   });
 
   describe("panel.list", () => {
@@ -880,6 +885,327 @@ describe("lisRouter", () => {
         });
 
         expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * P1-13/B29 (docs/audit/2026-09-15_cobertura/02-hc-farmacia-lab-imagen.md)
+     * — `result.enter` debe preferir `LabReferenceRange` estratificado por
+     * edad/sexo sobre la heurística sintética ±50%, pero SOLO cuando al
+     * menos una fila aplica al paciente; si no, cae exacto al fallback
+     * Wave 1 vigente hoy en prod (LabReferenceRange tiene 0 filas al
+     * 2026-09-27, verificado por consulta directa).
+     */
+    describe("P1-13/B29 — LabReferenceRange estratificado (edad/sexo)", () => {
+      const STRAT_PATIENT_ID = "00000000-0000-0000-0000-0000000000dd";
+      const now = Date.now();
+      const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
+      const ADULT_BIRTHDATE = new Date(now - 40 * YEAR_MS);
+      const PEDIATRIC_BIRTHDATE = new Date(now - 5 * YEAR_MS);
+
+      const pediatricRow = {
+        minValue: { toNumber: () => 60 },
+        maxValue: { toNumber: () => 110 },
+        ageMinYears: 0,
+        ageMaxYears: 12,
+        sex: "BOTH",
+        criticalLow: { toNumber: () => 30 },
+        criticalHigh: { toNumber: () => 180 },
+      };
+      // Revisión post-merge (hallazgo menor #5) — límites 80-120, DISTINTOS
+      // de LabTest.refRangeLow/High (70-100, ver mockItem). Si algún test
+      // usara por error el fallback heurístico en vez de este rango
+      // estratificado, el flag resultante divergiría (ver tests abajo) —
+      // con 70-100 ambos caminos coincidían y el test no discriminaba.
+      const adultRow = {
+        minValue: { toNumber: () => 80 },
+        maxValue: { toNumber: () => 120 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "BOTH",
+        criticalLow: { toNumber: () => 40 },
+        criticalHigh: { toNumber: () => 400 },
+      };
+      // Revisión post-merge (hallazgo mayor) — fila "general" sin bracket de
+      // edad (ageMinYears/ageMaxYears null), a diferencia de adultRow (18+).
+      // Mismos límites que LabTest.refRangeLow/High (70-100) a propósito:
+      // representa el caso real reportado (catálogo GLU con una fila BOTH
+      // sin edad + una fila pediátrica).
+      //
+      // También sirve para el hallazgo menor #3 (criticalLow/criticalHigh
+      // NULL en la fila estratificada): son columnas nullable
+      // (sql/27_lis_hardening_v2) y esta fila no las trae.
+      const generalRow = {
+        minValue: { toNumber: () => 70 },
+        maxValue: { toNumber: () => 100 },
+        ageMinYears: null,
+        ageMaxYears: null,
+        sex: "BOTH",
+        criticalLow: null,
+        criticalHigh: null,
+      };
+      const maleHemoglobin = {
+        minValue: { toNumber: () => 13.5 },
+        maxValue: { toNumber: () => 17.5 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "MALE",
+        criticalLow: { toNumber: () => 7 },
+        criticalHigh: { toNumber: () => 20 },
+      };
+      const femaleHemoglobin = {
+        minValue: { toNumber: () => 12.0 },
+        maxValue: { toNumber: () => 15.5 },
+        ageMinYears: 18,
+        ageMaxYears: null,
+        sex: "FEMALE",
+        criticalLow: { toNumber: () => 7 },
+        criticalHigh: { toNumber: () => 20 },
+      };
+
+      function mockItem(overrides?: { critical?: boolean }) {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          testId: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: overrides?.critical ?? false,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v, patientId: STRAT_PATIENT_ID },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      }
+
+      function mockPatient(birthDate: Date | null, sexCode: "M" | "F" | null) {
+        prisma.patient.findUnique.mockResolvedValue({
+          birthDate,
+          biologicalSex: sexCode ? { code: sexCode } : null,
+        } as never);
+      }
+
+      it("paciente pediátrico: mismo valor cae dentro del rango pediátrico (NORMAL)", async () => {
+        mockItem();
+        mockPatient(PEDIATRIC_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow, adultRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 105, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("paciente adulto: 110 cae NORMAL bajo el rango adulto estratificado (80-120)", async () => {
+        // Revisión post-merge (hallazgo menor #5) — adultRow ahora es 80-120,
+        // distinto de LabTest.refRangeLow/High (70-100). Si el router usara
+        // por error el fallback heurístico, 110 daría HIGH (110>100); el
+        // rango estratificado correcto da NORMAL (110 está en 80-120).
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow, adultRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 110, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("hallazgo mayor (revisión post-merge) — edad desconocida (sin birthDate) prefiere la fila GENERAL sin edad, no la pediátrica", async () => {
+        // Caso concreto del hallazgo: catálogo GLU con [BOTH sin edad
+        // 70-100, BOTH 0-12 60-110 crit 30/180] y un paciente adulto sin
+        // birthDate (patientAgeYears=null). Sin el fix, `filterApplicableRanges`
+        // no descarta ningún tramo por edad cuando age=null, y el rango
+        // pediátrico (más "específico" por tener bracket de edad) gana el
+        // ranking → 105 dentro de 60-110 → NORMAL, cuando debería ser HIGH.
+        mockItem();
+        mockPatient(null, null); // sin birthDate → patientAgeYears=null
+        prisma.labReferenceRange.findMany.mockResolvedValue([generalRow, pediatricRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 105, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("HIGH");
+      });
+
+      it("estratifica por sexo: MALE 15 → NORMAL (dentro de 13.5-17.5)", async () => {
+        // Revisión post-merge (hallazgo menor #5) — 15 está fuera del
+        // fallback heurístico (LabTest 70-100 → LOW) pero dentro del rango
+        // MALE estratificado (NORMAL). Con el valor previo (12.2, LOW en
+        // ambos caminos) el test no distinguía cuál rango se usó realmente.
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, "M");
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          maleHemoglobin,
+          femaleHemoglobin,
+        ] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 15, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("estratifica por sexo: FEMALE 12.2 → NORMAL (dentro de 12.0-15.5)", async () => {
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, "F");
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          maleHemoglobin,
+          femaleHemoglobin,
+        ] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 12.2, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("NORMAL");
+      });
+
+      it("hallazgo mayor (revisión post-merge) — sexo desconocido (I/U→null) NO acepta filas MALE/FEMALE, cae al fallback", async () => {
+        // Sin el fix, `sex==="BOTH"` en el `sex` YA CONVERTIDO (null→"BOTH")
+        // hace que `filterApplicableRanges` acepte cualquier fila sin
+        // importar su sexo real — con [FEMALE, MALE] empatados en
+        // especificidad, el sort estable elegía la FEMALE (primera del
+        // array) y 13 caía NORMAL (12.0-15.5). Con el fix ninguna fila
+        // MALE/FEMALE aplica a un sexo desconocido → fallback (LabTest
+        // 70-100) → 13 queda LOW.
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          femaleHemoglobin,
+          maleHemoglobin,
+        ] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 13, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("LOW");
+      });
+
+      it("sin fila aplicable (solo pediátrica, paciente adulto) → fallback heurístico idéntico al actual", async () => {
+        // Revisión post-merge (hallazgo menor #5) — critical=true + valor
+        // 160: la heurística Wave 1 (critHigh=100+50=150) da CRITICAL_HIGH;
+        // si el router usara por error la fila pediátrica no aplicable
+        // (60-110, critHigh 180), 160 solo daría HIGH. Con el valor previo
+        // (130/critical=false) ambos caminos coincidían en HIGH.
+        mockItem({ critical: true });
+        mockPatient(ADULT_BIRTHDATE, null);
+        // Solo existe una fila pediátrica (0-12) — no aplica a un adulto de 40.
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 160, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        expect(r.isCritical).toBe(true);
+      });
+
+      it("hallazgo menor #3 (revisión post-merge) — fila estratificada sin criticalLow/High + test.critical=true completa con heurística ±50% (no pierde la alerta crítica)", async () => {
+        mockItem({ critical: true });
+        mockPatient(ADULT_BIRTHDATE, null);
+        // generalRow: 70-100 sin criticalLow/criticalHigh (columnas nullable).
+        // Heurística esperada: criticalHigh = 100 + 50 = 150.
+        prisma.labReferenceRange.findMany.mockResolvedValue([generalRow] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 500, flag: "NORMAL" });
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        expect(r.isCritical).toBe(true);
+      });
+
+      it("hallazgo menor #2 (revisión post-merge) — el payload de lab.criticalValue informa el rango ESTRATIFICADO usado, no el flat de LabTest", async () => {
+        // pediatricRow (60-110) difiere de LabTest.refRangeLow/High (70-100,
+        // ver mockItem). Antes del fix, el payload siempre armaba
+        // referenceRange desde el LabTest flat, incoherente con el flag
+        // real (read-back IPSG.2).
+        mockItem({ critical: false });
+        mockPatient(PEDIATRIC_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([pediatricRow] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 190, flag: "NORMAL" });
+
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.referenceRange).toEqual({ low: 60, high: 110 });
+      });
+
+      it("hallazgo menor #6 (revisión post-merge de la corrección anterior) — rango abierto (minValue=null) no mezcla el extremo faltante con LabTest", async () => {
+        // openHighRow no trae límite inferior (rango tipo "< 110", ej. un
+        // analito sin cota mínima clínica). Antes del fix, `selectedRange
+        // ?.minValue ?? decimalToNullableNumber(item.test.refRangeLow)`
+        // caía al fallback de LabTest (70) porque `null ?? X` ignora que
+        // selectedRange SÍ existe — el payload mezclaba `low` de LabTest con
+        // `high` de la fila estratificada, la misma incoherencia IPSG.2 que
+        // el propio commit dice cerrar. Con el fix, `low` debe quedar en
+        // `null` (el rango estratificado no define mínimo), no en 70.
+        const openHighRow = {
+          minValue: null,
+          maxValue: { toNumber: () => 110 },
+          ageMinYears: 0,
+          ageMaxYears: null,
+          sex: "BOTH",
+          criticalLow: null,
+          criticalHigh: { toNumber: () => 200 },
+        };
+        mockItem({ critical: false });
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([openHighRow] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 250, flag: "NORMAL" });
+
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.referenceRange).toEqual({ low: null, high: 110 });
+      });
+
+      it("hallazgo menor #4 (revisión post-merge) — consulta LabReferenceRange con orderBy tenant-primero + id estable", async () => {
+        // No hay forma de simular en un mock el orden físico de filas de
+        // Postgres — se verifica que el router pida el orden correcto
+        // (tenant antes que catálogo global, luego id) para que el sort
+        // estable de evaluateLabResultFlag/selectReferenceRange no deje el
+        // desempate librado al orden físico de la tabla.
+        mockItem();
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([adultRow] as never);
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({ orderItemId: u, valueNumeric: 110, flag: "NORMAL" });
+        const callArgs = prisma.labReferenceRange.findMany.mock.calls[0]![0];
+        expect(callArgs.orderBy).toEqual([
+          { organizationId: { sort: "asc", nulls: "last" } },
+          { id: "asc" },
+        ]);
+      });
+
+      it("ruta crítica vía rango estratificado (no heurística) sigue disparando lab.criticalValue + createCriticalResultNotification", async () => {
+        // critical=false en el LabTest: si la ruta usara la heurística Wave 1
+        // (que exige test.critical=true para calcular criticalLow/High), NO
+        // habría criticalHigh y el resultado no podría ser crítico. Que el
+        // flag salga CRITICAL_HIGH prueba que se usó criticalHigh=130 de la
+        // fila estratificada, no la heurística.
+        mockItem({ critical: false });
+        mockPatient(ADULT_BIRTHDATE, null);
+        prisma.labReferenceRange.findMany.mockResolvedValue([
+          { ...adultRow, criticalHigh: { toNumber: () => 130 } },
+        ] as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+        const PERSONAL_ID = "00000000-0000-0000-0000-0000000000ee";
+        const NOTIF_ID = "00000000-0000-0000-0000-0000000000ff";
+        (prisma.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+          (strings: TemplateStringsArray) => {
+            const sql = strings.join(" ");
+            if (sql.includes("ece.personal_salud")) {
+              return Promise.resolve([{ id: PERSONAL_ID, nombre_completo: "Dr. Test" }]);
+            }
+            if (sql.includes("INSERT INTO ece.critical_result_notification")) {
+              return Promise.resolve([{ id: NOTIF_ID, notificado_en: new Date() }]);
+            }
+            return Promise.resolve([]);
+          },
+        );
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.result.enter({ orderItemId: u, valueNumeric: 140, flag: "NORMAL" });
+
+        expect(r.finalFlag).toBe("CRITICAL_HIGH");
+        expect(r.isCritical).toBe(true);
+        const eventTypes = prisma.domainEvent.create.mock.calls.map(
+          (c) => (c[0] as { data: { eventType: string } }).data.eventType,
+        );
+        expect(eventTypes).toEqual(["lab.criticalValue", "critical_result.emitted"]);
       });
     });
   });
