@@ -3,12 +3,16 @@
 -- D3 (docs/plan/PLAN-REMEDIACION-2026-09.md, hallazgo de revisión R1C
 -- 2026-09-19, ya referenciado como "raíz sistémica" en la cola de sql/261):
 -- los default privileges del schema `public` otorgan DML completo
--- (INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER) a `anon` en TODA TABLA
--- NUEVA. sql/152 y sql/261 cerraron esto tabla por tabla con REVOKE puntual
--- (13 tablas hoy: 9 de sql/152 + 3 de sql/261 + SsoProviderConfig de sql/258)
--- pero ninguno tocó la RAÍZ (`ALTER DEFAULT PRIVILEGES`), así que cualquier
--- tabla `public` creada desde entonces (o en el futuro) hereda el mismo
--- privilegio excesivo salvo que su propio SQL lo revoque explícito.
+-- (INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER, y MAINTAIN en PG17+)
+-- a `anon` en TODA TABLA NUEVA. sql/152 y sql/261 cerraron esto tabla por
+-- tabla con REVOKE puntual (13 tablas hoy: 9 de sql/152 + 3 de sql/261 +
+-- SsoProviderConfig de sql/258) pero SOLO para INSERT/UPDATE/DELETE/
+-- TRUNCATE — ninguna de esas 3 SQL revocó REFERENCES/TRIGGER, que las 13
+-- siguen teniendo en prod hoy (verificado 2026-09-28, ver §6 corregido en
+-- este archivo). Tampoco ninguno tocó la RAÍZ (`ALTER DEFAULT PRIVILEGES`),
+-- así que cualquier tabla `public` creada desde entonces (o en el futuro)
+-- hereda el mismo privilegio excesivo salvo que su propio SQL lo revoque
+-- explícito.
 --
 -- ⚠ NO APLICADO — requiere aprobación de Edwin. NO ejecutar contra prod
 -- hasta tener el OK explícito (ver CLAUDE.md §Preferencias del usuario).
@@ -28,13 +32,31 @@
 --   - `audit`   → SIN entradas de default ACL en absoluto (el default de
 --     Postgres — sin GRANT — aplica: el owner tiene todo, nadie más nada).
 --     Más restrictivo que `public` ya hoy. Nada que hacer aquí.
---   → Alcance real de este archivo: SOLO schema `public`.
+--   → Alcance real de este archivo: SOLO schema `public`, y SOLO para
+--     objetos tipo TABLA (`defaclobjtype = 'r'`).
+--
+-- Riesgo residual NO resuelto por este archivo (hallazgo de revisión
+-- 2026-09-28): el default ACL de `public` también cubre SEQUENCES
+-- (`defaclobjtype = 'S'`) y FUNCTIONS (`defaclobjtype = 'f'`), y en ambos
+-- casos `anon` sigue con privilegio por defecto — `anon=rwU` en secuencias,
+-- `anon=X` (EXECUTE) en funciones, para los dos owners (`postgres` y
+-- `supabase_admin`). Verificado además que hoy hay 5 funciones
+-- SECURITY DEFINER en `public` ejecutables por `anon`
+-- (`current_org_id_or_ece_context`, `fn_cita_no_show`, `fn_medico_de_turno`,
+-- `fn_next_contrato_arrendamiento`, `fn_next_liquidacion` — via
+-- `has_function_privilege`). Queda fuera de alcance de D3 a propósito — no
+-- se amplía este SQL para cerrarlo — pero es un ítem de seguimiento real
+-- para @SRE/@Orq, no solo un límite documentado como el de §2.
 --
 -- role_table_grants: `anon` tiene privilegios DML sobre 203 de 216 tablas
--- `public` con grants activos (las 13 restantes ya están limpias por
--- sql/152 + sql/258 + sql/261: Encounter, ImagingSlaConfig, LabSlaConfig,
--- Patient, PatientIdentifier, PortalAccount, PortalMagicLink, PortalSession,
--- Session, SsoProviderConfig, TrSlaConfig, User, UserCredential).
+-- `public` con grants activos (las 13 restantes ya están limpias DE
+-- INSERT/UPDATE/DELETE/TRUNCATE por sql/152 + sql/258 + sql/261: Encounter,
+-- ImagingSlaConfig, LabSlaConfig, Patient, PatientIdentifier, PortalAccount,
+-- PortalMagicLink, PortalSession, Session, SsoProviderConfig, TrSlaConfig,
+-- User, UserCredential — pero NINGUNA de esas 3 SQL tocó REFERENCES/TRIGGER:
+-- verificado en prod (role_table_grants, 2026-09-28) que las 13 siguen con
+-- ambos otorgados a `anon`. El barrido de §6 las incluye explícitamente
+-- para cerrar ese remanente.
 --
 -- pg_policies: de esas 203, SOLO UNA tiene una policy RLS dirigida
 -- explícitamente `TO anon` — `public.surgical_form_submission`
@@ -133,6 +155,15 @@
 -- tanto a nivel de default privileges (objetos futuros) como en el barrido
 -- de tablas existentes (§5), salvo la excepción puntual de §6.
 --
+-- Nota MAINTAIN (PG17+, hallazgo de revisión 2026-09-28): prod corre
+-- PostgreSQL 17.6 (`select version()`), no 15. El default ACL de tablas en
+-- PG17 agrega el privilegio MAINTAIN (`m` en `arwdDxtm`, ver §1) — LOCK
+-- TABLE en cualquier modo, VACUUM, REINDEX, CLUSTER, REFRESH MATERIALIZED
+-- VIEW. PostgREST no lo expone, así que el riesgo práctico es bajo, pero es
+-- la misma clase que TRUNCATE (que este archivo sí revoca) y no existía en
+-- PG15/16 donde `docs/runbooks/db-reconstruccion-fuera-de-supabase.md`
+-- reconstruye desde cero — de ahí el guard de versión abajo y en §6/§7.
+--
 -- =============================================================================
 -- 5) RAÍZ — ALTER DEFAULT PRIVILEGES para objetos futuros de `public`
 -- =============================================================================
@@ -141,6 +172,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON TABLES
   FROM anon;
+
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 170000 THEN
+    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public '
+      || 'REVOKE MAINTAIN ON TABLES FROM anon';
+  END IF;
+END;
+$$;
 
 -- Idempotente: REVOKE (incluso sobre default privileges) es no-op si el
 -- privilegio por defecto ya no está otorgado.
@@ -152,11 +192,18 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 -- Lista explícita (NO `REVOKE ... ON ALL TABLES IN SCHEMA public`, que
 -- barrería a ciegas incluyendo SELECT/tablas fuera de este análisis) — las
 -- 203 tablas confirmadas hoy con al menos un privilegio DML/TRUNCATE
--- otorgado a `anon` en `information_schema.role_table_grants`, MENOS
--- `surgical_form_submission` (tratada aparte, preserva INSERT) y las 13 ya
--- remediadas por sql/152 + sql/258 + sql/261 (no necesitan REVOKE de nuevo,
--- pero repetirlo sería no-op inocuo si se agregaran — se dejan fuera por
--- prolijidad, no por riesgo).
+-- otorgado a `anon` en `information_schema.role_table_grants`, MÁS las 13
+-- tablas ya remediadas por sql/152 + sql/258 + sql/261 (Encounter,
+-- ImagingSlaConfig, LabSlaConfig, Patient, PatientIdentifier, PortalAccount,
+-- PortalMagicLink, PortalSession, Session, SsoProviderConfig, TrSlaConfig,
+-- User, UserCredential) — SÍ se incluyen aquí porque esas 3 SQL solo
+-- revocaron INSERT/UPDATE/DELETE/TRUNCATE, nunca REFERENCES/TRIGGER
+-- (hallazgo de revisión 2026-09-28, verificado en prod con
+-- role_table_grants: las 13 seguían con ambos otorgados a `anon`). Repetir
+-- el REVOKE de DML/TRUNCATE sobre ellas es no-op inocuo; el efecto real de
+-- incluirlas es cerrar REFERENCES/TRIGGER, que hasta ahora seguían
+-- abiertos. Se deja fuera SOLO `surgical_form_submission` (tratada aparte
+-- en §7, preserva INSERT).
 --
 -- `to_regclass` hace el barrido tolerante a Postgres donde alguna tabla no
 -- exista (mismo patrón que sql/261 — un Postgres reconstruido desde cero no
@@ -165,53 +212,63 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 DO $$
 DECLARE
   t text;
+  pg17_plus boolean := current_setting('server_version_num')::int >= 170000;
   tablas text[] := ARRAY[
     'AbacRule', 'Account', 'AccountReceivable', 'AccountingPeriod', 'AgeBand',
     'AgendaExcepcion', 'AgendaHorario', 'AgendaMedico', 'AsignacionTurno',
-    'AuditDashboardConfig', 'AuthorizationRequest', 'Bed', 'BedAssignment', 'BiologicalSex',
-    'BiomedicalEquipment', 'BloodBank', 'BloodUnit', 'CalibrationLog', 'CareTask',
-    'CatalogoInsumo', 'CatalogoMedicamento', 'ClinicalConcept', 'ClinicalConceptMap',
-    'ClinicalNote', 'ClinicalNoteAttachment', 'CodeSystem', 'Consultorio',
-    'ContratoArrendamiento', 'ContratoCargo', 'ContratoJornada', 'ConvenioHonorario',
-    'CostCenter', 'CostCenterAllocationRule', 'CostCenterAllocationTarget', 'Country',
+    'AuditDashboardConfig', 'AuthorizationRequest', 'Bed', 'BedAssignment',
+    'BiologicalSex', 'BiomedicalEquipment', 'BloodBank', 'BloodUnit',
+    'CalibrationLog', 'CareTask', 'CatalogoInsumo', 'CatalogoMedicamento',
+    'ClinicalConcept', 'ClinicalConceptMap', 'ClinicalNote',
+    'ClinicalNoteAttachment', 'CodeSystem', 'Consultorio', 'ContratoArrendamiento',
+    'ContratoCargo', 'ContratoJornada', 'ConvenioHonorario', 'CostCenter',
+    'CostCenterAllocationRule', 'CostCenterAllocationTarget', 'Country',
     'CountryCurrency', 'CoverageLetter', 'CoverageRule', 'CrossMatch', 'Currency',
-    'DeathCertificate', 'DietPlan', 'DomainEvent', 'Drug', 'DrugClassifier', 'EcePatientMerge',
-    'EducationLevel', 'EmergencyNote', 'EmergencyVisit', 'EncounterDiagnosis',
-    'EncounterTransfer', 'Establishment', 'Ethnicity', 'ExchangeRate',
-    'ExpedienteFormatConfig', 'Gender', 'GeoDivision', 'GsrnHistory', 'GuardianRelationship',
-    'HisOperatingCost', 'Holiday', 'Icd10Catalog', 'IdentifierType', 'ImagingFormFieldConfig',
-    'ImagingModality', 'ImagingModuleRule', 'ImagingOrder', 'ImagingReport', 'ImagingRequest',
-    'ImagingTestAttrs', 'InpatientAdmission', 'InpatientCarePlan', 'InpatientKardex',
-    'InpatientVitals', 'InsuranceClaim', 'InsurancePlan', 'InsurancePlanCoverage', 'Insurer',
-    'Invoice', 'InvoiceItem', 'InvoicePayment', 'JournalEntry', 'JournalLine', 'LabOrder',
-    'LabOrderItem', 'LabOrderItemParameter', 'LabPanel', 'LabReferenceRange', 'LabReflexRule',
-    'LabResult', 'LabSampleSubtype', 'LabSampleType', 'LabSpecimen', 'LabTest',
-    'LabTestParameter', 'Language', 'Ledger', 'Liquidacion', 'LiquidacionCompensacion',
-    'ListaEspera', 'MaritalStatus', 'MedicalGasUsage', 'MedicalSpecialty',
-    'MedicationAdministration', 'MedicationDispense', 'MedicationGtin', 'MedicoAfiliado',
-    'MedicoAfiliadoEspecialidad', 'Notification', 'NpsResponse', 'NutritionAssessment',
-    'NutritionOrder', 'Occupation', 'OdooSyncLog', 'OdooSyncMapping', 'OperatingRoom',
-    'Organization', 'OutpatientAppointment', 'OutpatientConsultation',
-    'PathologyMacroDescription', 'PathologyMicroDescription', 'PathologyOrder',
-    'PathologyReport', 'PathologySpecimen', 'PatientAccount', 'PatientAccountService',
-    'PatientAddress', 'PatientAllergy', 'PatientCategory', 'PatientConsent', 'PatientCoverage',
-    'PatientCoverageOverride', 'PatientEmail', 'PatientEmergencyContact', 'PatientEthnicity',
-    'PatientLanguage', 'PatientMerge', 'PatientPhone', 'PatientReligion', 'PatientType',
-    'PatientVaccination', 'PerformanceSample', 'Permission', 'PharmacyCart',
-    'PharmacyCartItem', 'PharmacyOrder', 'PharmacyReservation', 'PharmacySubstitution',
-    'PlantillaTurno', 'PmSchedule', 'Prescription', 'PrescriptionItem', 'ProduccionMedica',
-    'ProgramacionTurno', 'RateLimitHit', 'ReglaHonorario', 'Religion', 'RespiratoryOrder',
-    'RespiratoryOrderItem', 'Role', 'RoleCodeAlias', 'RoleNotificationDefault',
-    'RolePermission', 'Room', 'ServiceCategory', 'ServicePriceList', 'ServicePriceListItem',
-    'ServicePriceRule', 'ServiceUnit', 'SrsFabricante', 'SrsFormaFarmaceutica',
-    'SrsPresentacion', 'SrsPrincipioActivo', 'SrsRegistroCache', 'StaffGsrn', 'StockItem',
-    'StockLot', 'StockMovement', 'SurgeryCase', 'TipoCuenta', 'TrMedicamentoInhalado',
-    'TrProcedimiento', 'Transfusion', 'TransfusionRequest', 'TriageDiscriminator',
-    'TriageDiscriminatorHit', 'TriageEvaluation', 'TriageFlowchart',
-    'TriageFlowchartVitalSign', 'TriageLevel', 'TriageVitalSign', 'UserExternalIdentity',
-    'UserNotificationPreference', 'UserOrganizationRole', 'UserServiceUnitAssignment',
-    'Vaccine', 'VentilatorSession', 'WorkflowTaskAction', 'chat_knowledge_chunk',
-    'chat_message', 'chat_session', 'offline_sync_log'
+    'DeathCertificate', 'DietPlan', 'DomainEvent', 'Drug', 'DrugClassifier',
+    'EcePatientMerge', 'EducationLevel', 'EmergencyNote', 'EmergencyVisit',
+    'Encounter', 'EncounterDiagnosis', 'EncounterTransfer', 'Establishment',
+    'Ethnicity', 'ExchangeRate', 'ExpedienteFormatConfig', 'Gender', 'GeoDivision',
+    'GsrnHistory', 'GuardianRelationship', 'HisOperatingCost', 'Holiday',
+    'Icd10Catalog', 'IdentifierType', 'ImagingFormFieldConfig', 'ImagingModality',
+    'ImagingModuleRule', 'ImagingOrder', 'ImagingReport', 'ImagingRequest',
+    'ImagingSlaConfig', 'ImagingTestAttrs', 'InpatientAdmission',
+    'InpatientCarePlan', 'InpatientKardex', 'InpatientVitals', 'InsuranceClaim',
+    'InsurancePlan', 'InsurancePlanCoverage', 'Insurer', 'Invoice', 'InvoiceItem',
+    'InvoicePayment', 'JournalEntry', 'JournalLine', 'LabOrder', 'LabOrderItem',
+    'LabOrderItemParameter', 'LabPanel', 'LabReferenceRange', 'LabReflexRule',
+    'LabResult', 'LabSampleSubtype', 'LabSampleType', 'LabSlaConfig', 'LabSpecimen',
+    'LabTest', 'LabTestParameter', 'Language', 'Ledger', 'Liquidacion',
+    'LiquidacionCompensacion', 'ListaEspera', 'MaritalStatus', 'MedicalGasUsage',
+    'MedicalSpecialty', 'MedicationAdministration', 'MedicationDispense',
+    'MedicationGtin', 'MedicoAfiliado', 'MedicoAfiliadoEspecialidad',
+    'Notification', 'NpsResponse', 'NutritionAssessment', 'NutritionOrder',
+    'Occupation', 'OdooSyncLog', 'OdooSyncMapping', 'OperatingRoom', 'Organization',
+    'OutpatientAppointment', 'OutpatientConsultation', 'PathologyMacroDescription',
+    'PathologyMicroDescription', 'PathologyOrder', 'PathologyReport',
+    'PathologySpecimen', 'Patient', 'PatientAccount', 'PatientAccountService',
+    'PatientAddress', 'PatientAllergy', 'PatientCategory', 'PatientConsent',
+    'PatientCoverage', 'PatientCoverageOverride', 'PatientEmail',
+    'PatientEmergencyContact', 'PatientEthnicity', 'PatientIdentifier',
+    'PatientLanguage', 'PatientMerge', 'PatientPhone', 'PatientReligion',
+    'PatientType', 'PatientVaccination', 'PerformanceSample', 'Permission',
+    'PharmacyCart', 'PharmacyCartItem', 'PharmacyOrder', 'PharmacyReservation',
+    'PharmacySubstitution', 'PlantillaTurno', 'PmSchedule', 'PortalAccount',
+    'PortalMagicLink', 'PortalSession', 'Prescription', 'PrescriptionItem',
+    'ProduccionMedica', 'ProgramacionTurno', 'RateLimitHit', 'ReglaHonorario',
+    'Religion', 'RespiratoryOrder', 'RespiratoryOrderItem', 'Role', 'RoleCodeAlias',
+    'RoleNotificationDefault', 'RolePermission', 'Room', 'ServiceCategory',
+    'ServicePriceList', 'ServicePriceListItem', 'ServicePriceRule', 'ServiceUnit',
+    'Session', 'SrsFabricante', 'SrsFormaFarmaceutica', 'SrsPresentacion',
+    'SrsPrincipioActivo', 'SrsRegistroCache', 'SsoProviderConfig', 'StaffGsrn',
+    'StockItem', 'StockLot', 'StockMovement', 'SurgeryCase', 'TipoCuenta',
+    'TrMedicamentoInhalado', 'TrProcedimiento', 'TrSlaConfig', 'Transfusion',
+    'TransfusionRequest', 'TriageDiscriminator', 'TriageDiscriminatorHit',
+    'TriageEvaluation', 'TriageFlowchart', 'TriageFlowchartVitalSign',
+    'TriageLevel', 'TriageVitalSign', 'User', 'UserCredential',
+    'UserExternalIdentity', 'UserNotificationPreference', 'UserOrganizationRole',
+    'UserServiceUnitAssignment', 'Vaccine', 'VentilatorSession',
+    'WorkflowTaskAction', 'chat_knowledge_chunk', 'chat_message', 'chat_session',
+    'offline_sync_log'
   ];
 BEGIN
   FOREACH t IN ARRAY tablas LOOP
@@ -220,6 +277,9 @@ BEGIN
         'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.%I FROM anon',
         t
       );
+      IF pg17_plus THEN
+        EXECUTE format('REVOKE MAINTAIN ON TABLE public.%I FROM anon', t);
+      END IF;
     END IF;
   END LOOP;
 END;
@@ -235,12 +295,15 @@ $$;
 -- el que decide si esa tabla/policy sigue siendo necesaria; esa decisión es
 -- de docs/45_registro_drift_schema.md §7 P2. Se revoca únicamente lo que
 -- NINGUNA policy ampara hoy (no existe policy `anon` para UPDATE, DELETE,
--- TRUNCATE, ni motivo para REFERENCES/TRIGGER).
+-- TRUNCATE, MAINTAIN, ni motivo para REFERENCES/TRIGGER).
 
 DO $$
 BEGIN
   IF to_regclass('public.surgical_form_submission') IS NOT NULL THEN
     EXECUTE 'REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.surgical_form_submission FROM anon';
+    IF current_setting('server_version_num')::int >= 170000 THEN
+      EXECUTE 'REVOKE MAINTAIN ON TABLE public.surgical_form_submission FROM anon';
+    END IF;
   END IF;
 END;
 $$;
@@ -249,9 +312,10 @@ $$;
 -- 8) Verificación post-aplicación esperada
 -- =============================================================================
 --
--- a) Default privileges de `postgres` en `public` ya no incluyen DML para
---    `anon` en tablas futuras (la entrada de `supabase_admin` persiste — ver
---    §2, es el límite documentado, no un error de esta verificación):
+-- a) Default privileges de `postgres` en `public` ya no incluyen DML ni
+--    MAINTAIN para `anon` en tablas futuras (la entrada de `supabase_admin`
+--    persiste — ver §2, es el límite documentado, no un error de esta
+--    verificación):
 --
 --      SELECT d.defaclacl
 --      FROM pg_default_acl d
@@ -259,19 +323,22 @@ $$;
 --      WHERE n.nspname = 'public'
 --        AND d.defaclobjtype = 'r'
 --        AND d.defaclrole::regrole::text = 'postgres';
---      -- → el elemento "anon=..." del arreglo ya no contiene a/w/d/D/x/t
---      --   (puede seguir apareciendo con solo r/U si tenía SELECT/USAGE)
+--      -- → el elemento "anon=..." del arreglo ya no contiene a/w/d/D/x/t/m
+--      --   (puede seguir apareciendo con solo r/U si tenía SELECT/USAGE;
+--      --   en PG15/16, sin MAINTAIN, no habrá `m` que revocar — el DO de
+--      --   §5 es no-op ahí por el guard de versión)
 --
--- b) Cero grants DML/TRUNCATE/REFERENCES/TRIGGER de `anon` en `public`,
---    excepto INSERT en `surgical_form_submission`:
+-- b) Cero grants DML/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN de `anon` en
+--    `public`, excepto INSERT en `surgical_form_submission`:
 --
 --      SELECT table_name, privilege_type
 --      FROM information_schema.role_table_grants
 --      WHERE grantee = 'anon'
 --        AND table_schema = 'public'
---        AND privilege_type IN ('INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')
+--        AND privilege_type IN ('INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN')
 --        AND NOT (table_name = 'surgical_form_submission' AND privilege_type = 'INSERT');
---      -- → 0 filas
+--      -- → 0 filas (MAINTAIN solo aplica en PG17+; en PG15/16 no aparece
+--      --   como privilege_type posible, la condición es vacuamente cierta)
 --
 -- c) Una tabla `public` creada DESPUÉS de este archivo (por `postgres`) no
 --    hereda DML para `anon`:
