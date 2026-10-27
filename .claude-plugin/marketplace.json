@@ -1,0 +1,11 @@
+{
+  "name": "avante",
+  "owner": { "name": "Inversiones Avante — Transformación Digital" },
+  "plugins": [
+    {
+      "name": "sr-perkins",
+      "source": "./plugins/sr-perkins",
+      "description": "Sr. Perkins — superagente ejecutivo con lentes de especialistas intercambiables."
+    }
+  ]
+}

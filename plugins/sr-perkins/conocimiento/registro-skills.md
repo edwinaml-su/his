@@ -51,3 +51,4 @@ Ver `repositorio/catalogo.md` del plugin para la descripción completa.
 - 2026-10-23 [usuario] entra gerente-proyectos-avante (PMO) al repositorio; perfil `proyectos`.
 - 2026-10-24 [usuario] entra gerente-operaciones-avante (Gerente de Operaciones, lidera la cadena de suministro con GS1 y gestiona con 4DX) al repositorio; perfil `operaciones`.
 - 2026-10-27 [usuario] se activa todo el repositorio (11 skills); nuevo perfil `todo`.
+- 2026-10-27 [usuario] el plugin se versiona en el repo HIS (`plugins/sr-perkins/`, marketplace `avante`), con núcleo de 3 skills y las 11 del repositorio; reemplaza a la skill provisional `/perkins`.

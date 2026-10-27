@@ -50,7 +50,6 @@ test-results/
 .claude/skills/*
 !.claude/skills/pre-pr-review/
 !.claude/skills/director/
-!.claude/skills/perkins/
 
 # Archivos temporales con credenciales para configuración manual de Vercel/etc.
 # (se generan con node, se copian al dashboard, y se borran)
